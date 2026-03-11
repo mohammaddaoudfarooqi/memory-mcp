@@ -59,21 +59,21 @@ class BedrockLLMProvider(LLMProvider):
         """Send a chat request to the LLM."""
         return await asyncio.to_thread(self._invoke_converse, messages, **kwargs)
 
-    async def assess_importance(self, content: str) -> float:
+    async def assess_importance(self, content: str, prompt: str | None = None) -> float:
         """Ask the LLM to rate importance on a 1-10 scale, normalize to 0.1-1.0."""
+        if prompt:
+            text = prompt.format(content=content)
+        else:
+            text = (
+                "Rate the importance of the following memory on a scale of 1-10, "
+                "where 1 is trivial and 10 is critically important. "
+                "Respond with ONLY a single integer.\n\n"
+                f"Memory: {content}"
+            )
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "text": (
-                            "Rate the importance of the following memory on a scale of 1-10, "
-                            "where 1 is trivial and 10 is critically important. "
-                            "Respond with ONLY a single integer.\n\n"
-                            f"Memory: {content}"
-                        )
-                    }
-                ],
+                "content": [{"text": text}],
             }
         ]
         response = await self.chat(messages)
@@ -84,20 +84,20 @@ class BedrockLLMProvider(LLMProvider):
             return max(0.1, min(1.0, score / 10.0))
         return 0.5  # Default on parse failure
 
-    async def generate_summary(self, content: str, max_length: int = 100) -> str:
+    async def generate_summary(self, content: str, max_length: int = 100, prompt: str | None = None) -> str:
         """Ask the LLM to summarize content."""
+        if prompt:
+            text = prompt.format(content=content)
+        else:
+            text = (
+                f"Summarize the following text in {max_length} words or fewer. "
+                "Be concise and capture the key points.\n\n"
+                f"Text: {content}"
+            )
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {
-                        "text": (
-                            f"Summarize the following text in {max_length} words or fewer. "
-                            "Be concise and capture the key points.\n\n"
-                            f"Text: {content}"
-                        )
-                    }
-                ],
+                "content": [{"text": text}],
             }
         ]
         return await self.chat(messages)
