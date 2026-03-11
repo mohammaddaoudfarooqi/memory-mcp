@@ -248,7 +248,7 @@ class TestEnsureSearchIndexesBg:
 class TestMainEntryPoint:
     """__main__.py main() calls mcp.run."""
 
-    def test_main_calls_mcp_run(self):
+    def test_main_calls_mcp_run_http_default(self):
         mock_config = _make_config(port=8000)
         with patch("memory_mcp.__main__.mcp") as mock_mcp, \
              patch("memory_mcp.__main__.MCPConfig", return_value=mock_config):
@@ -267,3 +267,11 @@ class TestMainEntryPoint:
             mock_mcp.run.assert_called_once_with(
                 transport="streamable-http", host="0.0.0.0", port=9999,
             )
+
+    def test_main_stdio_transport(self):
+        mock_config = _make_config(transport="stdio")
+        with patch("memory_mcp.__main__.mcp") as mock_mcp, \
+             patch("memory_mcp.__main__.MCPConfig", return_value=mock_config):
+            from memory_mcp.__main__ import main
+            main()
+            mock_mcp.run.assert_called_once_with(transport="stdio")

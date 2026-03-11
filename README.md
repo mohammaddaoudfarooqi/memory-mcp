@@ -39,7 +39,46 @@ AWS_REGION=us-east-1
 memory-mcp
 ```
 
-The server listens on `http://0.0.0.0:8000` using the Streamable HTTP MCP transport.
+The server listens on `http://0.0.0.0:8000` by default using the Streamable HTTP transport.
+
+To run in **stdio mode** instead (for local use with Claude Code, Cursor, etc.):
+
+```bash
+TRANSPORT=stdio memory-mcp
+```
+
+## Client Configuration
+
+Add one of the following to your MCP client's `mcp.json` (see `mcp.json.example`).
+
+**HTTP** — connect to a running server:
+
+```json
+{
+  "servers": {
+    "memory-mcp": {
+      "url": "http://localhost:8000/mcp",
+      "type": "http"
+    }
+  }
+}
+```
+
+**Stdio** — launch as a subprocess:
+
+```json
+{
+  "servers": {
+    "memory-mcp": {
+      "command": "memory-mcp",
+      "env": {
+        "TRANSPORT": "stdio",
+        "MONGODB_CONNECTION_STRING": "mongodb+srv://user:pass@cluster.mongodb.net/memory_mcp"
+      }
+    }
+  }
+}
+```
 
 ## Features
 
@@ -56,7 +95,7 @@ The server listens on `http://0.0.0.0:8000` using the Streamable HTTP MCP transp
 
 ## MCP Tools
 
-Memory-MCP exposes 7 tools over the Model Context Protocol:
+Memory-MCP exposes 12 tools over the Model Context Protocol:
 
 | Tool | Description |
 |------|-------------|
@@ -65,8 +104,13 @@ Memory-MCP exposes 7 tools over the Model Context Protocol:
 | `delete_memory` | Soft-delete memories by ID, tags, or time range |
 | `check_cache` | Check semantic cache for a similar previous query |
 | `store_cache` | Cache a query-response pair for future lookups |
-| `hybrid_search` | Combined vector + full-text search with RRF merging |
+| `hybrid_search` | Combined vector + full-text search with RRF ranking |
 | `search_web` | Web search via Tavily API |
+| `memory_health` | Health statistics for a user's memory store |
+| `wipe_user_data` | Permanently delete all data for a user |
+| `cache_invalidate` | Invalidate cached entries by pattern or all |
+| `store_decision` | Store a keyed decision with configurable TTL |
+| `recall_decision` | Recall a previously stored decision by key |
 
 See [docs/api-reference.md](docs/api-reference.md) for full tool signatures and parameters.
 
@@ -93,6 +137,7 @@ Configuration is managed through environment variables loaded from a `.env` file
 | `AWS_ACCESS_KEY_ID` | Yes | — | AWS credentials for Bedrock |
 | `AWS_SECRET_ACCESS_KEY` | Yes | — | AWS credentials for Bedrock |
 | `AWS_REGION` | No | `us-east-1` | AWS region for Bedrock |
+| `TRANSPORT` | No | `streamable-http` | `streamable-http` or `stdio` |
 | `EMBEDDING_PROVIDER` | No | `bedrock` | `bedrock` or `voyage` |
 | `TAVILY_API_KEY` | No | — | Enables `search_web` tool |
 

@@ -14,6 +14,7 @@ class MCPConfig(BaseSettings):
     app_name: str = "memory-mcp"
     app_version: str = "3.2.0"
     port: int = 8000
+    transport: str = "streamable-http"
     debug: bool = False
 
     # MongoDB

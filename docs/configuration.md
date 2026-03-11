@@ -12,7 +12,8 @@ The configuration class is `MCPConfig` in `core/config.py`, built on Pydantic Ba
 |----------|------|----------|---------|-------------|
 | `APP_NAME` | string | No | `memory-mcp` | Application name |
 | `APP_VERSION` | string | No | `3.2.0` | Application version |
-| `PORT` | integer | No | `8000` | Server listen port |
+| `PORT` | integer | No | `8000` | Server listen port (ignored when `TRANSPORT=stdio`) |
+| `TRANSPORT` | string | No | `streamable-http` | MCP transport mode: `streamable-http` or `stdio` |
 | `DEBUG` | boolean | No | `false` | Debug mode |
 
 ### MongoDB

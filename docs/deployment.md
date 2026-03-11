@@ -100,6 +100,109 @@ Memory-MCP requires a MongoDB Atlas cluster with the following:
 
 If Atlas Search index creation fails (e.g., on a non-Atlas deployment), the server continues running. The `hybrid_search` tool and vector-based `recall_memory` require these indexes to function.
 
+## Authentication
+
+Auth is disabled by default. When enabled, every request must carry a valid `Authorization: Bearer <token>` header. Tokens can be either a **static API key** or an **HS256 JWT**.
+
+### Enable auth
+
+Add these variables to your `.env`:
+
+```bash
+AUTH_ENABLED=true
+AUTH_SECRET=your-secret-key-at-least-32-characters-long
+```
+
+`AUTH_SECRET` is the HS256 signing key used to issue and verify JWTs. It must be set when `AUTH_ENABLED=true`; otherwise auth silently falls back to disabled.
+
+### API keys
+
+To allow clients to authenticate with static API keys, set `MEMORY_MCP_API_KEYS` as a comma-separated list of `key=user_id` pairs:
+
+```bash
+MEMORY_MCP_API_KEYS="abc123=alice@acme.com,xyz789=bob@acme.com"
+```
+
+Clients send the key in the `Authorization` header:
+
+```
+Authorization: Bearer abc123
+```
+
+The server resolves the key to the associated user ID (`alice@acme.com`). If the key is not recognized, it falls through to JWT verification.
+
+### JWT tokens
+
+JWTs are signed with `AUTH_SECRET` using HS256. The required claims are:
+
+| Claim | Description |
+|-------|-------------|
+| `sub` | User identity (mapped to `user_id` in tools) |
+| `iss` | Must be `memory-mcp` |
+| `exp` | Expiration timestamp (Unix epoch) |
+
+Token lifetime defaults to 24 hours (`AUTH_TOKEN_EXPIRY_SECONDS=86400`).
+
+### Verification order
+
+When a request arrives with `Authorization: Bearer <token>`:
+
+1. Check if the token matches a registered API key in `MEMORY_MCP_API_KEYS`
+2. If not, attempt to decode it as an HS256 JWT signed with `AUTH_SECRET`
+3. If neither succeeds, the request is rejected
+
+### Client configuration
+
+**HTTP mode** — pass the token in the `headers` field of `mcp.json`:
+
+```json
+{
+  "servers": {
+    "memory-mcp": {
+      "url": "http://localhost:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer abc123"
+      },
+      "type": "http"
+    }
+  }
+}
+```
+
+**Stdio mode** — pass auth config as environment variables:
+
+```json
+{
+  "servers": {
+    "memory-mcp": {
+      "command": "memory-mcp",
+      "env": {
+        "TRANSPORT": "stdio",
+        "MONGODB_CONNECTION_STRING": "mongodb+srv://...",
+        "AUTH_ENABLED": "true",
+        "AUTH_SECRET": "your-secret-key-at-least-32-characters-long",
+        "MEMORY_MCP_API_KEYS": "abc123=alice@acme.com"
+      }
+    }
+  }
+}
+```
+
+### Governance and rate limiting
+
+When auth is enabled, you can optionally enable governance policies and rate limiting:
+
+```bash
+GOVERNANCE_ENABLED=true
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_MAX_REQUESTS=100
+RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+Governance assigns role-based policies (admin, power_user, end_user) and rate limiting enforces per-user request quotas. Both are checked via `check_access` before every tool invocation.
+
+See [configuration.md](configuration.md) for the full list of auth, governance, and rate limiting variables.
+
 ## Production Considerations
 
 ### Memory

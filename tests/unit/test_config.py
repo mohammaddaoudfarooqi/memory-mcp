@@ -34,7 +34,12 @@ class TestMCPConfigDefaults:
         assert config.app_name == "memory-mcp"
         assert config.app_version == "3.2.0"
         assert config.port == 8000
+        assert config.transport == "streamable-http"
         assert config.debug is False
+
+    def test_transport_override(self):
+        config = _make_config(transport="stdio")
+        assert config.transport == "stdio"
 
     def test_mongodb_defaults(self):
         config = _make_config()

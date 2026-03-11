@@ -7,7 +7,10 @@ from memory_mcp.server import mcp
 def main():
     """CLI entry point for ``memory-mcp`` script."""
     config = MCPConfig()
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=config.port)
+    if config.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=config.port)
 
 
 if __name__ == "__main__":
