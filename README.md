@@ -84,12 +84,16 @@ Add one of the following to your MCP client's `mcp.json` (see `mcp.json.example`
 
 - **Memory storage and recall**: Store conversation messages as short-term memories (STM) with automatic long-term memory (LTM) candidate creation
 - **Semantic search**: Vector similarity search over stored memories using configurable embedding providers (AWS Bedrock, Voyage AI)
-- **Hybrid search**: Combined vector and full-text search with Reciprocal Rank Fusion (RRF) ranking
+- **Hybrid search**: Combined vector and full-text search using MongoDB `$rankFusion`
 - **Semantic caching**: Cache query-response pairs and retrieve them by similarity threshold
+- **Decision stickiness**: Key-value store for persistent user preferences and decisions with optional TTL
 - **Background enrichment**: Async worker that assesses memory importance and generates summaries via LLM
+- **Memory consolidation**: Background worker for STM compression, low-importance forgetting, and STM-to-LTM promotion
 - **Memory evolution**: Automatic reinforcement of similar memories and merge detection
 - **Calibrated ranking**: Three-component scoring combining recency, importance, and relevance
+- **Authentication**: API key and HS256 JWT authentication with optional governance and rate limiting
 - **Audit logging**: Buffered audit trail for all operations with configurable flush strategies
+- **Admin tools**: Memory health monitoring, user data wiping, and cache invalidation
 - **Web search**: Optional Tavily API integration for web search
 - **Multi-tenant isolation**: All queries scoped by `user_id`
 
@@ -116,14 +120,19 @@ See [docs/api-reference.md](docs/api-reference.md) for full tool signatures and 
 
 ## Architecture
 
-Memory-MCP runs as a single FastMCP process with four internal services:
+Memory-MCP runs as a single FastMCP process with the following internal services:
 
 - **MemoryService** — STM/LTM storage, recall with calibrated ranking, soft-delete
 - **CacheService** — Semantic cache with vector similarity lookup
 - **AuditService** — Buffered audit logging with MongoDB persistence and local file fallback
 - **EnrichmentWorker** — Background async task for LTM importance assessment, summarization, and memory evolution
+- **ConsolidationWorker** — Background task for STM compression, forgetting, and STM-to-LTM promotion
+- **DecisionService** — Keyed key-value store for sticky decisions with optional TTL
+- **GovernanceService** — Role-based access policies (optional, via `GOVERNANCE_ENABLED`)
+- **RateLimiter** — Per-user sliding-window rate limiting (optional, via `RATE_LIMIT_ENABLED`)
+- **PromptLibrary** — Versioned prompt templates for enrichment prompts
 
-Embedding and LLM operations are handled by pluggable providers (AWS Bedrock, Voyage AI). MongoDB Atlas provides vector search, full-text search, and TTL-based document expiration.
+Embedding and LLM operations are handled by pluggable providers (AWS Bedrock, Voyage AI). MongoDB Atlas provides vector search, full-text search, and TTL-based document expiration. Authentication supports static API keys and HS256 JWTs (optional, via `AUTH_ENABLED`).
 
 See [docs/architecture.md](docs/architecture.md) for data flow diagrams and design decisions.
 
@@ -140,6 +149,7 @@ Configuration is managed through environment variables loaded from a `.env` file
 | `TRANSPORT` | No | `streamable-http` | `streamable-http` or `stdio` |
 | `EMBEDDING_PROVIDER` | No | `bedrock` | `bedrock` or `voyage` |
 | `TAVILY_API_KEY` | No | — | Enables `search_web` tool |
+| `AUTH_ENABLED` | No | `false` | Enable API key / JWT authentication |
 
 See [docs/configuration.md](docs/configuration.md) for the complete reference of 50+ configuration variables.
 
@@ -161,6 +171,10 @@ docker compose up -d
 ```
 
 See [docs/deployment.md](docs/deployment.md) for Docker configuration, health checks, and production settings.
+
+## Agent Instructions
+
+To configure LLM agents (Claude Code, Cursor, Copilot, Gemini) to use memory-mcp, see [docs/agent-instructions.md](docs/agent-instructions.md) for ready-to-use templates for `CLAUDE.md`, `.cursorrules`, `copilot-instructions.md`, and `GEMINI.md`.
 
 ## License
 

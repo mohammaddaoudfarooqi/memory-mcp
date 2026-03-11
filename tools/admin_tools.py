@@ -100,7 +100,7 @@ def register_admin_tools(mcp):
             db = (await DatabaseManager.get_instance()).db
 
             memories_result = await db["memories"].delete_many({"user_id": user_id})
-            cache_result = await db["cache"].delete_many({"user_id": user_id})
+            cache_result = await db["semantic_cache"].delete_many({"user_id": user_id})
             audit_result = await db["audit_log"].delete_many({"user_id": user_id})
 
             duration_ms = int((time.time() - start) * 1000)

@@ -10,6 +10,7 @@ Run with: .venv/bin/python tests/integration/test_functional.py
 
 import json
 import http.client
+import os
 import sys
 import uuid
 import time
@@ -20,6 +21,7 @@ import textwrap
 MCP_HOST = "localhost"
 MCP_PORT = 8000
 MCP_ENDPOINT = "/mcp"
+AUTH_TOKEN = os.environ.get("MEMORY_MCP_TEST_TOKEN", "mcp-key-mdf-2025")
 
 # Test identifiers
 USER_ID = f"test-user-{uuid.uuid4().hex[:8]}"
@@ -53,6 +55,7 @@ def _post(method: str, params: dict | None = None) -> dict:
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
     }
     if session_id:
         headers["Mcp-Session-Id"] = session_id

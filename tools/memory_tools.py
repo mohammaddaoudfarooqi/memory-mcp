@@ -26,6 +26,10 @@ def register_memory_tools(mcp):
             return {"error": access_err}
         start = time.time()
         try:
+            # Normalize messages: accept "role" or "message_type"
+            for msg in messages:
+                if "message_type" not in msg:
+                    msg["message_type"] = msg.get("role", "human")
             stm_ids = await svc.memory_service.store_stm(user_id, conversation_id, messages)
             duration_ms = int((time.time() - start) * 1000)
             await svc.audit_service.log(

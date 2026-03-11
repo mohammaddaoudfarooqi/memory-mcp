@@ -35,7 +35,7 @@ From `docker-compose.yml`:
 - **Network**: `memory-mcp-network` (bridge driver)
 - **Memory limit**: 2 GB
 - **Restart policy**: `unless-stopped`
-- **Health check**: HTTP GET to `/mcp` on port 8000 (accepts 200, 401, or 405 status codes)
+- **Health check**: HTTP GET to `/health` on port 8000 (unauthenticated, returns 200 when the server is up)
   - Interval: 30s
   - Timeout: 10s
   - Retries: 3
@@ -67,10 +67,10 @@ The server listens on `0.0.0.0:8000` with Streamable HTTP transport.
 Check that the server is running:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/mcp
+curl -s http://localhost:8000/health
 ```
 
-A response code of `200`, `401`, or `405` indicates the server is up.
+A JSON response `{"status":"ok"}` confirms the server is up. This endpoint does not require authentication.
 
 Check container health:
 
@@ -91,7 +91,7 @@ docker compose logs -f memory-mcp
 Memory-MCP requires a MongoDB Atlas cluster with the following:
 
 1. **Database**: `memory_mcp` (or the name set in `MONGODB_DATABASE_NAME`)
-2. **Collections**: Created automatically on first use: `memories`, `semantic_cache`, `audit_log`
+2. **Collections**: Created automatically on first use: `memories`, `semantic_cache`, `audit_log`, `decisions`, `rate_limits`, `governance_profiles`, `prompts`
 3. **Standard indexes**: Created automatically at server startup (Stage 1)
 4. **Atlas Search indexes**: Created automatically in the background (Stage 2). Three indexes:
    - `memories_vector_index` — Vector search on `embedding` field (1536 dimensions, cosine similarity)

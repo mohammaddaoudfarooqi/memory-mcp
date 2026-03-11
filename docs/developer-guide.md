@@ -34,21 +34,26 @@ The server starts on `http://0.0.0.0:8000` using Streamable HTTP transport. On s
 2. Creates standard B-tree indexes (blocking)
 3. Initializes embedding and LLM providers
 4. Creates service instances and populates the service registry
-5. Starts the enrichment background worker
+5. Starts the enrichment and consolidation background workers
 6. Launches Atlas Search index creation in the background
+
+An unauthenticated `/health` endpoint is available for Docker and load balancer probes.
 
 ## Project Structure
 
 ```
 __init__.py           # Package version (__version__ = "3.2.0")
 __main__.py           # CLI entry point (memory-mcp command)
-server.py             # FastMCP lifespan, tool registration
+server.py             # FastMCP lifespan, tool registration, /health endpoint
 core/
-  config.py           # MCPConfig (Pydantic BaseSettings)
+  config.py           # MCPConfig (Pydantic BaseSettings, 50+ fields)
   database.py         # DatabaseManager (async singleton)
   registry.py         # ServiceRegistry (singleton service holder)
   collections.py      # Index and collection schema definitions
   migrations.py       # Startup index creation (standard + Atlas Search)
+auth/
+  api_keys.py         # APIKeyManager (loads MEMORY_MCP_API_KEYS env var)
+  token_verifier.py   # MemoryMCPTokenVerifier (API key + HS256 JWT)
 providers/
   base.py             # Abstract EmbeddingProvider, LLMProvider
   bedrock.py          # AWS Bedrock embedding and LLM implementations
@@ -59,13 +64,20 @@ services/
   cache.py            # CacheService (check, store, invalidate)
   audit.py            # AuditService (buffered logging)
   enrichment.py       # EnrichmentWorker (background async task)
+  consolidation.py    # ConsolidationWorker (STM compression, forgetting, promotion)
+  decision.py         # DecisionService (keyed key-value store with TTL)
+  governance.py       # GovernanceService (role-based access policies)
+  rate_limiter.py     # RateLimiter (sliding-window per-user limits)
+  prompt_library.py   # PromptLibrary (versioned prompt templates)
 tools/
   memory_tools.py     # store_memory, recall_memory, delete_memory
   cache_tools.py      # check_cache, store_cache
   search_tools.py     # hybrid_search, search_web
+  admin_tools.py      # memory_health, wipe_user_data, cache_invalidate
+  decision_tools.py   # store_decision, recall_decision
 tests/
   unit/               # Unit tests (pytest + pytest-asyncio)
-  integration/        # Integration tests (placeholder)
+  integration/        # Functional tests (end-to-end MCP tool calls)
 ```
 
 ## Common Tasks

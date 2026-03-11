@@ -91,6 +91,70 @@ class TestStoreMemory:
         assert audit_calls[0][0][3] == "error"
 
 
+class TestStoreMemoryNormalization:
+    """store_memory normalizes 'role' to 'message_type' for MCP clients."""
+
+    async def test_role_field_mapped_to_message_type(self):
+        reg = _make_registry()
+        reg.memory_service.store_stm = AsyncMock(return_value=["id1"])
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+
+        from memory_mcp.tools.memory_tools import register_memory_tools
+        register_memory_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            await tools["store_memory"](
+                user_id="user1",
+                conversation_id="conv1",
+                messages=[{"content": "Hello", "role": "human"}],
+            )
+
+        call_args = reg.memory_service.store_stm.call_args[0]
+        assert call_args[2][0]["message_type"] == "human"
+
+    async def test_missing_role_defaults_to_human(self):
+        reg = _make_registry()
+        reg.memory_service.store_stm = AsyncMock(return_value=["id1"])
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+
+        from memory_mcp.tools.memory_tools import register_memory_tools
+        register_memory_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            await tools["store_memory"](
+                user_id="user1",
+                conversation_id="conv1",
+                messages=[{"content": "Hello"}],
+            )
+
+        call_args = reg.memory_service.store_stm.call_args[0]
+        assert call_args[2][0]["message_type"] == "human"
+
+    async def test_explicit_message_type_not_overwritten(self):
+        reg = _make_registry()
+        reg.memory_service.store_stm = AsyncMock(return_value=["id1"])
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+
+        from memory_mcp.tools.memory_tools import register_memory_tools
+        register_memory_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            await tools["store_memory"](
+                user_id="user1",
+                conversation_id="conv1",
+                messages=[{"content": "Hello", "message_type": "ai", "role": "assistant"}],
+            )
+
+        call_args = reg.memory_service.store_stm.call_args[0]
+        assert call_args[2][0]["message_type"] == "ai"
+
+
 class TestRecallMemory:
     """TC-046: recall_memory tool delegates to memory_service.recall."""
 

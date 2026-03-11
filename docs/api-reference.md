@@ -222,7 +222,7 @@ Defined in `tools/search_tools.py`.
 
 ### `hybrid_search`
 
-Combined vector and full-text search over memories using Reciprocal Rank Fusion (RRF). Requires MongoDB Atlas with both `memories_vector_index` and `memories_fts_index` configured.
+Combined vector and full-text search over memories using MongoDB `$rankFusion` for Reciprocal Rank Fusion (RRF). Requires MongoDB Atlas with both `memories_vector_index` and `memories_fts_index` configured.
 
 **Parameters:**
 
@@ -259,11 +259,11 @@ Combined vector and full-text search over memories using Reciprocal Rank Fusion 
 | `count` | integer | Number of results |
 
 **Behavior:**
-- Executes two concurrent MongoDB aggregation pipelines:
-  1. `$vectorSearch` on the `embedding` field
-  2. `$search` on `content` and `summary` fields
-- Merges results using RRF: `score = vector_weight/(k+rank+1) + text_weight/(k+rank+1)` with importance boost
-- Configurable via `RRF_K`, `RRF_VECTOR_WEIGHT`, `RRF_TEXT_WEIGHT`
+- Executes a single MongoDB `$rankFusion` aggregation with two sub-pipelines:
+  1. `vectorPipeline`: `$vectorSearch` on the `embedding` field
+  2. `fullTextPipeline`: `$search` on `content` and `summary` fields
+- MongoDB merges results server-side using Reciprocal Rank Fusion
+- Pipeline weights configurable via `RRF_VECTOR_WEIGHT` and `RRF_TEXT_WEIGHT`
 - Excludes soft-deleted documents
 
 ---
@@ -307,6 +307,200 @@ Web search via the Tavily API. Requires `TAVILY_API_KEY` to be configured.
 | `results` | list[dict] | Tavily search results |
 | `query` | string | Original query |
 | `error` | string | Error message (when Tavily is not configured) |
+
+## Admin Tools
+
+Defined in `tools/admin_tools.py`.
+
+### `memory_health`
+
+Get health statistics for a user's memory store.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `user_id` | string | Yes | — | User identifier |
+
+**Returns:**
+
+```json
+{
+  "user_id": "user-123",
+  "total_memories": 42,
+  "tier_stats": {"stm": 12, "ltm": 30},
+  "enrichment_stats": {"completed": 28, "pending": 2}
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | string | The queried user |
+| `total_memories` | integer | Total non-deleted memories |
+| `tier_stats` | dict | Memory count per tier (`stm`, `ltm`) |
+| `enrichment_stats` | dict | Memory count per enrichment status (`pending`, `completed`) |
+
+---
+
+### `wipe_user_data`
+
+Permanently delete ALL data for a user (memories, cache, audit log). This action is irreversible.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `user_id` | string | Yes | — | User identifier |
+| `confirm` | boolean | No | `false` | Must be `true` to proceed |
+
+**Returns (without confirm):**
+
+```json
+{
+  "error": "wipe_user_data requires confirm=true. This will permanently delete ALL user data."
+}
+```
+
+**Returns (success):**
+
+```json
+{
+  "user_id": "user-123",
+  "memories_deleted": 42,
+  "cache_deleted": 5,
+  "audit_deleted": 100
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | string | The wiped user |
+| `memories_deleted` | integer | Memories hard-deleted |
+| `cache_deleted` | integer | Cache entries hard-deleted |
+| `audit_deleted` | integer | Audit log entries hard-deleted |
+
+**Behavior:**
+- Hard-deletes from `memories`, `cache`, and `audit_log` collections
+- Requires `confirm=true`; returns an error otherwise
+- Irreversible — data cannot be recovered
+
+---
+
+### `cache_invalidate`
+
+Invalidate cached entries for a user. Use `invalidate_all=true` to clear all, or `pattern` to match queries.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `user_id` | string | Yes | — | User identifier |
+| `pattern` | string \| null | No | `null` | Pattern to match cached queries |
+| `invalidate_all` | boolean | No | `false` | Clear all cache entries if `true` |
+
+**Returns:**
+
+```json
+{
+  "user_id": "user-123",
+  "deleted_count": 3
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | string | The user whose cache was invalidated |
+| `deleted_count` | integer | Number of cache entries deleted |
+
+---
+
+## Decision Tools
+
+Defined in `tools/decision_tools.py`.
+
+### `store_decision`
+
+Store a keyed decision for a user. Decisions persist across conversations with configurable TTL. Use for preferences, choices, and sticky settings.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `user_id` | string | Yes | — | User identifier |
+| `key` | string | Yes | — | Decision key identifier |
+| `value` | string | Yes | — | Decision value |
+| `ttl_days` | integer \| null | No | `null` | Time-to-live in days (omit for no expiration) |
+
+**Returns:**
+
+```json
+{
+  "key": "preferred_language",
+  "action": "created",
+  "user_id": "user-123"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | The decision key |
+| `action` | string | `"created"` or `"updated"` |
+| `user_id` | string | The user who stored the decision |
+
+**Behavior:**
+- Upserts by `(user_id, key)` — storing the same key again overwrites the value
+- `action` indicates whether the decision was newly created or updated
+- When `ttl_days` is set, the decision auto-expires after that many days via MongoDB TTL index
+
+---
+
+### `recall_decision`
+
+Recall a previously stored decision by key for a user. Returns the decision value and metadata, or `not_found`.
+
+**Parameters:**
+
+| Name | Type | Required | Default | Description |
+|------|------|----------|---------|-------------|
+| `user_id` | string | Yes | — | User identifier |
+| `key` | string | Yes | — | Decision key to retrieve |
+
+**Returns (found):**
+
+```json
+{
+  "key": "preferred_language",
+  "found": true,
+  "decision": {
+    "key": "preferred_language",
+    "value": "Python",
+    "user_id": "user-123",
+    "created_at": "2025-01-15T10:30:00",
+    "updated_at": "2025-01-15T10:30:00"
+  }
+}
+```
+
+**Returns (not found):**
+
+```json
+{
+  "key": "preferred_language",
+  "found": false
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | The queried decision key |
+| `found` | boolean | Whether a non-expired decision exists |
+| `decision` | dict \| absent | Decision document (present only when `found=true`) |
+
+**Behavior:**
+- Returns `found: false` if the key doesn't exist or has expired
+- Does not modify the decision (read-only)
+
+---
 
 ## Audit Logging
 

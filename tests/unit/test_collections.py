@@ -61,7 +61,7 @@ class TestStandardIndexes:
         assert "partialFilterExpression" in kwargs
 
     def test_memories_has_conversation_index(self):
-        """memories user_id + conversation_id + sequence_number index."""
+        """memories user_id + conversation_id index."""
         idx = [i for i in STANDARD_INDEXES
                if i["collection"] == MEMORIES
                and i["name"] == "ix_memories_conversation"]

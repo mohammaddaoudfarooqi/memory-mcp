@@ -160,10 +160,11 @@ class TestDockerCompose:
         test_cmd = " ".join(hc["test"]) if isinstance(hc["test"], list) else hc["test"]
         assert "8000" in test_cmd
 
-    def test_health_check_uses_post(self):
+    def test_health_check_uses_get_health(self):
         hc = self.data["services"]["memory-mcp"]["healthcheck"]
         test_cmd = " ".join(hc["test"]) if isinstance(hc["test"], list) else hc["test"]
-        assert "POST" in test_cmd
+        assert "GET" in test_cmd
+        assert "/health" in test_cmd
         assert "status == 200" in test_cmd
 
     def test_network_is_standalone_bridge(self):

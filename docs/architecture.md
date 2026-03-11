@@ -49,7 +49,7 @@ The server targets AI agents and LLM-based applications that need to remember pa
 - Initialized after all services are created during lifespan startup
 
 **`Collections and Indexes`** (`core/collections.py`, `core/migrations.py`)
-- Defines three collections: `memories`, `semantic_cache`, `audit_log`
+- Defines seven collections: `memories`, `semantic_cache`, `audit_log`, `decisions`, `rate_limits`, `governance_profiles`, `prompts`
 - Two-stage index creation:
   - Stage 1 (blocking): Standard B-tree indexes for queries and TTL expiration
   - Stage 2 (background): Atlas Search indexes for vector and full-text search
@@ -100,13 +100,37 @@ The server targets AI agents and LLM-based applications that need to remember pa
 - For each memory: assesses importance via LLM, generates summary, runs evolution check.
 - Retries up to 3 times on failure; marks as failed on exhaustion.
 
+**`ConsolidationWorker`** (`services/consolidation.py`)
+- Runs as an `asyncio.Task` alongside the enrichment worker.
+- Compresses old STM (past `stm_compression_age_hours`), forgets low-importance memories, and promotes qualified STM to LTM.
+- Cycle interval configurable via `CONSOLIDATION_INTERVAL_HOURS`.
+
+**`DecisionService`** (`services/decision.py`)
+- Keyed key-value store for sticky decisions/preferences.
+- Upserts by `(user_id, key)` with optional TTL via MongoDB TTL index on `expires_at`.
+
+**`GovernanceService`** (`services/governance.py`)
+- Role-based access policies (admin, power_user, end_user) stored in `governance_profiles` collection.
+- In-memory cache with configurable TTL.
+- Enabled via `GOVERNANCE_ENABLED=true`.
+
+**`RateLimiter`** (`services/rate_limiter.py`)
+- Sliding-window per-user rate limiting using the `rate_limits` collection.
+- Enabled via `RATE_LIMIT_ENABLED=true`.
+
+**`PromptLibrary`** (`services/prompt_library.py`)
+- Versioned prompt templates stored in the `prompts` collection.
+- Falls back to hardcoded defaults when `PROMPT_EXPERIMENT_ENABLED=false`.
+
 ### Tool Layer (`tools/`)
 
-Seven MCP tools organized into three modules:
+Twelve MCP tools organized into five modules:
 
 - `tools/memory_tools.py`: `store_memory`, `recall_memory`, `delete_memory`
 - `tools/cache_tools.py`: `check_cache`, `store_cache`
 - `tools/search_tools.py`: `hybrid_search`, `search_web`
+- `tools/admin_tools.py`: `memory_health`, `wipe_user_data`, `cache_invalidate`
+- `tools/decision_tools.py`: `store_decision`, `recall_decision`
 
 Each tool delegates to its service via `ServiceRegistry.get()` and logs the operation through `AuditService`.
 
@@ -145,11 +169,12 @@ MCP Client
 ```
 MCP Client
   → hybrid_search(user_id, query, limit=10)
-    → Concurrent execution:
-      → Pipeline 1: MongoDB $vectorSearch on embedding
-      → Pipeline 2: MongoDB $search on content + summary
-    → RRF merge: score = vector_weight/(k+rank) + text_weight/(k+rank)
-      with importance boost: × (1 + importance × 0.1)
+    → EmbeddingProvider.generate_embedding(query)
+    → MongoDB $rankFusion aggregation:
+        vectorPipeline: $vectorSearch on embedding field
+        fullTextPipeline: $search on content + summary fields
+        combination.weights: {vector: rrf_vector_weight, text: rrf_text_weight}
+    → $limit → $project (strip embedding)
     → AuditService.log(operation="search")
   ← {results: [...], count: N}
 ```
@@ -207,8 +232,10 @@ EnrichmentWorker (continuous loop, every 30s)
 
 - **Multi-tenant isolation**: Every service method injects `user_id` into MongoDB query filters via `_base_filter()`. No cross-user data leakage is possible through the service layer.
 - **Soft-delete filtering**: All queries include `deleted_at: null` to exclude soft-deleted documents.
-- **No authentication (Phase 0)**: The server trusts the `user_id` parameter provided by the MCP client. Authentication and authorization are planned for Phase 2 (JWT-based, with RBAC).
+- **Authentication**: When `AUTH_ENABLED=true`, every MCP request must carry a valid `Authorization: Bearer <token>` header. Tokens are verified as either a registered API key or an HS256 JWT. See [deployment.md](deployment.md) for configuration.
+- **Governance and rate limiting**: Optional role-based access control (`GOVERNANCE_ENABLED`) and per-user request quotas (`RATE_LIMIT_ENABLED`) are available when auth is enabled.
 - **Credential management**: AWS credentials and API keys are loaded from environment variables, not hardcoded.
+- **Health endpoint**: The `/health` endpoint is unauthenticated by design for Docker and load balancer probes.
 
 ## Collections
 
@@ -217,3 +244,7 @@ EnrichmentWorker (continuous loop, every 30s)
 | `memories` | STM and LTM storage | `expires_at` (STM: 24h), `deleted_at` (soft-delete: 30d) |
 | `semantic_cache` | Query-response cache | `created_at` (default: 3600s) |
 | `audit_log` | Operation audit trail | `timestamp` (365 days) |
+| `decisions` | Sticky key-value decisions | `expires_at` (configurable per decision) |
+| `rate_limits` | Per-user rate limit counters | `timestamp` (24h) |
+| `governance_profiles` | Role-based access policies | — |
+| `prompts` | Versioned prompt templates | — |

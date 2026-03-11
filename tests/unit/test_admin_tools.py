@@ -130,7 +130,7 @@ class TestWipeUserData:
 
         mock_db = MagicMock()
         def getitem(name):
-            return {"memories": mock_memories, "cache": mock_cache, "audit_log": mock_audit}[name]
+            return {"memories": mock_memories, "semantic_cache": mock_cache, "audit_log": mock_audit}[name]
         mock_db.__getitem__ = MagicMock(side_effect=getitem)
 
         mock_db_manager = MagicMock()

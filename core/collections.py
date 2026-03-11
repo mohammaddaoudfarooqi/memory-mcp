@@ -35,7 +35,7 @@ STANDARD_INDEXES: list[dict] = [
     },
     {
         "collection": MEMORIES,
-        "keys": [("user_id", 1), ("conversation_id", 1), ("sequence_number", 1)],
+        "keys": [("user_id", 1), ("conversation_id", 1)],
         "name": "ix_memories_conversation",
         "kwargs": {"partialFilterExpression": {"deleted_at": None}},
     },

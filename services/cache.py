@@ -58,7 +58,6 @@ class CacheService:
             "query": query,
             "response": response,
             "embedding": embedding,
-            "embedding_model": self.config.embedding_model,
             "created_at": datetime.now(timezone.utc),
         }
         result = await self.cache.insert_one(doc)

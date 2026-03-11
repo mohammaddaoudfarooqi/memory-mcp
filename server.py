@@ -62,7 +62,7 @@ async def lifespan(app: FastMCP):
         db_manager.db["memories"], config, providers,
     )
     cache_service = CacheService(
-        db_manager.db["cache"], config, providers.embedding,
+        db_manager.db["semantic_cache"], config, providers.embedding,
     )
     audit_service = AuditService(
         db_manager.db["audit_log"], config,
@@ -147,6 +147,14 @@ _config = MCPConfig()
 _auth = _build_auth(_config)
 
 mcp = FastMCP("MongoDB Memory MCP Server", lifespan=lifespan, auth=_auth)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    """Unauthenticated health check endpoint for Docker/load balancer probes."""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"status": "ok"})
+
 
 # Register all tools
 register_memory_tools(mcp)

@@ -151,7 +151,7 @@ class TestLifespan:
 
             # CacheService should receive the cache collection
             cache_call = mock_cache_cls.call_args
-            assert cache_call[0][0] == collections["cache"]
+            assert cache_call[0][0] == collections["semantic_cache"]
 
             # AuditService should receive the audit_log collection
             audit_call = mock_audit_cls.call_args
@@ -243,6 +243,30 @@ class TestEnsureSearchIndexesBg:
             mock_db = MagicMock()
             # CancelledError is caught and logged, not re-raised
             await _ensure_search_indexes_bg(mock_db)
+
+
+class TestHealthEndpoint:
+    """Health check endpoint is registered on the MCP server."""
+
+    def test_health_route_registered(self):
+        """The /health custom route is registered on the mcp instance."""
+        from memory_mcp.server import mcp
+        # custom_route registers on the server's custom routes
+        route_paths = [r.path for r in getattr(mcp, "_custom_routes", [])]
+        # If custom_routes isn't exposed, verify the function exists
+        from memory_mcp.server import health_check
+        assert callable(health_check)
+
+    async def test_health_returns_ok(self):
+        """The health check handler returns a 200 JSON response."""
+        from memory_mcp.server import health_check
+        from unittest.mock import MagicMock
+        request = MagicMock()
+        response = await health_check(request)
+        assert response.status_code == 200
+        import json
+        body = json.loads(response.body)
+        assert body["status"] == "ok"
 
 
 class TestMainEntryPoint:

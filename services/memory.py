@@ -73,7 +73,6 @@ class MemoryService:
                 "content": msg["content"],
                 "summary": None,
                 "embedding": emb,
-                "embedding_model": self.config.embedding_model,
                 "memory_type": None,
                 "retention_tier": "ephemeral",
                 "tags": msg.get("tags", []),
@@ -81,9 +80,7 @@ class MemoryService:
                 "access_count": 0,
                 "last_accessed": None,
                 "conversation_id": conversation_id,
-                "sequence_number": msg.get("sequence_number"),
                 "message_type": msg["message_type"],
-                "source_type": "conversation",
                 "source_stm_id": None,
                 "enrichment_status": "not_applicable",
                 "enrichment_retries": 0,
@@ -92,7 +89,6 @@ class MemoryService:
                 "expires_at": now + self._retention_ttl("ephemeral"),
                 "deleted_at": None,
                 "is_deleted": False,
-                "metadata": msg.get("metadata", {}),
             }
             docs.append(stm_doc)
 
@@ -110,7 +106,6 @@ class MemoryService:
                     "content": msg["content"],
                     "summary": None,
                     "embedding": embeddings[i],
-                    "embedding_model": self.config.embedding_model,
                     "memory_type": None,
                     "retention_tier": "standard",
                     "tags": msg.get("tags", []),
@@ -118,9 +113,7 @@ class MemoryService:
                     "access_count": 0,
                     "last_accessed": None,
                     "conversation_id": conversation_id,
-                    "sequence_number": msg.get("sequence_number"),
                     "message_type": msg["message_type"],
-                    "source_type": "conversation",
                     "source_stm_id": stm_ids[i],
                     "enrichment_status": "pending",
                     "enrichment_retries": 0,
@@ -129,7 +122,6 @@ class MemoryService:
                     "expires_at": ltm_now + self._retention_ttl("standard"),
                     "deleted_at": None,
                     "is_deleted": False,
-                    "metadata": msg.get("metadata", {}),
                 }
                 ltm_docs.append(ltm_doc)
 
@@ -382,7 +374,6 @@ class MemoryService:
                 "content": content,
                 "summary": None,
                 "embedding": embedding,
-                "embedding_model": self.config.embedding_model,
                 "memory_type": None,
                 "retention_tier": "standard",
                 "tags": [],
@@ -390,9 +381,7 @@ class MemoryService:
                 "access_count": 0,
                 "last_accessed": None,
                 "conversation_id": None,
-                "sequence_number": None,
                 "message_type": None,
-                "source_type": "merge",
                 "source_stm_id": None,
                 "enrichment_status": "merge_pending",
                 "enrichment_retries": 0,
@@ -402,7 +391,6 @@ class MemoryService:
                 "expires_at": now + self._retention_ttl("standard"),
                 "deleted_at": None,
                 "is_deleted": False,
-                "metadata": {},
             }
             await self.memories.insert_one(merge_doc)
             return "merge_queued"
