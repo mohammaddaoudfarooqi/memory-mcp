@@ -47,6 +47,9 @@ class TestLifespan:
              patch("memory_mcp.server.CacheService") as mock_cache_cls, \
              patch("memory_mcp.server.AuditService") as mock_audit_cls, \
              patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
              patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
              patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock) as mock_ei, \
              patch("memory_mcp.server.asyncio") as mock_asyncio:
@@ -58,11 +61,22 @@ class TestLifespan:
             mock_enrichment = MagicMock()
             mock_enrichment.run = AsyncMock()
             mock_enrich_cls.return_value = mock_enrichment
+            mock_consolidation = MagicMock()
+            mock_consolidation.run = AsyncMock()
+            mock_consol_cls.return_value = mock_consolidation
+
+            mock_reg_instance = MagicMock()
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
             mock_enrichment_task = MagicMock()
+            mock_consolidation_task = MagicMock()
             mock_search_task = MagicMock()
             mock_search_task.done = MagicMock(return_value=False)
-            mock_asyncio.create_task.side_effect = [mock_enrichment_task, mock_search_task]
+            mock_asyncio.create_task.side_effect = [
+                mock_enrichment_task, mock_consolidation_task, mock_search_task,
+            ]
             mock_enrichment_task.cancel = MagicMock()
+            mock_consolidation_task.cancel = MagicMock()
 
             from memory_mcp.server import lifespan
 
@@ -78,12 +92,13 @@ class TestLifespan:
             mock_cache_cls.assert_called_once()
             mock_audit_cls.assert_called_once()
             mock_reg_cls.initialize.assert_called_once()
-            assert mock_asyncio.create_task.call_count == 2
+            assert mock_asyncio.create_task.call_count == 3
 
             # Shutdown
             await ctx.__aexit__(None, None, None)
 
             mock_enrichment_task.cancel.assert_called_once()
+            mock_consolidation_task.cancel.assert_called_once()
             mock_search_task.cancel.assert_called_once()
             mock_audit_cls.return_value.flush.assert_called_once()
             mock_db_manager.close.assert_called_once()
@@ -100,6 +115,9 @@ class TestLifespan:
              patch("memory_mcp.server.CacheService") as mock_cache_cls, \
              patch("memory_mcp.server.AuditService") as mock_audit_cls, \
              patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
              patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
              patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
              patch("memory_mcp.server.asyncio") as mock_asyncio:
@@ -111,9 +129,14 @@ class TestLifespan:
             mock_enrichment = MagicMock()
             mock_enrichment.run = AsyncMock()
             mock_enrich_cls.return_value = mock_enrichment
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_reg_instance = MagicMock()
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
             mock_search_task = MagicMock()
             mock_search_task.done = MagicMock(return_value=True)
-            mock_asyncio.create_task.side_effect = [MagicMock(), mock_search_task]
+            mock_asyncio.create_task.side_effect = [MagicMock(), MagicMock(), mock_search_task]
 
             from memory_mcp.server import lifespan
 
@@ -159,6 +182,9 @@ class TestEnrichmentWorkerLifecycle:
              patch("memory_mcp.server.CacheService") as mock_cache_cls, \
              patch("memory_mcp.server.AuditService") as mock_audit_cls, \
              patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
              patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
              patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
              patch("memory_mcp.server.asyncio") as mock_asyncio:
@@ -170,9 +196,14 @@ class TestEnrichmentWorkerLifecycle:
             mock_enrichment = MagicMock()
             mock_enrichment.run = AsyncMock()
             mock_enrich_cls.return_value = mock_enrichment
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_reg_instance = MagicMock()
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
             mock_search_task = MagicMock()
             mock_search_task.done = MagicMock(return_value=True)
-            mock_asyncio.create_task.side_effect = [MagicMock(), mock_search_task]
+            mock_asyncio.create_task.side_effect = [MagicMock(), MagicMock(), mock_search_task]
 
             from memory_mcp.server import lifespan
 
@@ -218,9 +249,21 @@ class TestMainEntryPoint:
     """__main__.py main() calls mcp.run."""
 
     def test_main_calls_mcp_run(self):
-        with patch("memory_mcp.__main__.mcp") as mock_mcp:
+        mock_config = _make_config(port=8000)
+        with patch("memory_mcp.__main__.mcp") as mock_mcp, \
+             patch("memory_mcp.__main__.MCPConfig", return_value=mock_config):
             from memory_mcp.__main__ import main
             main()
             mock_mcp.run.assert_called_once_with(
                 transport="streamable-http", host="0.0.0.0", port=8000,
+            )
+
+    def test_main_uses_config_port(self):
+        mock_config = _make_config(port=9999)
+        with patch("memory_mcp.__main__.mcp") as mock_mcp, \
+             patch("memory_mcp.__main__.MCPConfig", return_value=mock_config):
+            from memory_mcp.__main__ import main
+            main()
+            mock_mcp.run.assert_called_once_with(
+                transport="streamable-http", host="0.0.0.0", port=9999,
             )

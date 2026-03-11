@@ -777,3 +777,37 @@ class TestCalibratedRankNaiveDatetime:
         results = await service.recall("user1", "test query")
         assert len(results) == 1
         assert "final_score" in results[0]
+
+
+class TestRetentionTTL:
+    """_retention_ttl returns correct timedelta per tier."""
+
+    def _make_service(self, **config_overrides):
+        col = _make_collection()
+        config = _make_config(**config_overrides)
+        providers = _make_providers()
+        return MemoryService(col, config, providers)
+
+    def test_critical_tier(self):
+        service = self._make_service(ltm_retention_critical_days=365)
+        assert service._retention_ttl("critical") == timedelta(days=365)
+
+    def test_reference_tier(self):
+        service = self._make_service(ltm_retention_reference_days=180)
+        assert service._retention_ttl("reference") == timedelta(days=180)
+
+    def test_standard_tier(self):
+        service = self._make_service(ltm_retention_standard_days=90)
+        assert service._retention_ttl("standard") == timedelta(days=90)
+
+    def test_temporary_tier(self):
+        service = self._make_service(ltm_retention_temporary_days=7)
+        assert service._retention_ttl("temporary") == timedelta(days=7)
+
+    def test_ephemeral_tier(self):
+        service = self._make_service(stm_ttl_hours=24)
+        assert service._retention_ttl("ephemeral") == timedelta(hours=24)
+
+    def test_unknown_tier_falls_back_to_standard(self):
+        service = self._make_service(ltm_retention_standard_days=90)
+        assert service._retention_ttl("unknown_tier") == timedelta(days=90)

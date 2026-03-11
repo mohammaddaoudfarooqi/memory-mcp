@@ -25,6 +25,10 @@ class ServiceRegistry:
         self.cache_service: CacheService | None = None
         self.audit_service: AuditService | None = None
         self.providers: ProviderManager | None = None
+        self.governance_service = None
+        self.rate_limiter = None
+        self.prompt_library = None
+        self.decision_service = None
 
     @classmethod
     def initialize(

@@ -13,9 +13,16 @@ from memory_mcp.core.registry import ServiceRegistry
 from memory_mcp.providers.manager import ProviderManager
 from memory_mcp.services.audit import AuditService
 from memory_mcp.services.cache import CacheService
+from memory_mcp.services.consolidation import ConsolidationWorker
+from memory_mcp.services.decision import DecisionService
 from memory_mcp.services.enrichment import EnrichmentWorker
+from memory_mcp.services.governance import GovernanceService
 from memory_mcp.services.memory import MemoryService
+from memory_mcp.services.prompt_library import PromptLibrary
+from memory_mcp.services.rate_limiter import RateLimiter
+from memory_mcp.tools.admin_tools import register_admin_tools
 from memory_mcp.tools.cache_tools import register_cache_tools
+from memory_mcp.tools.decision_tools import register_decision_tools
 from memory_mcp.tools.memory_tools import register_memory_tools
 from memory_mcp.tools.search_tools import register_search_tools
 
@@ -45,7 +52,7 @@ async def lifespan(app: FastMCP):
         db_manager.db["audit_log"], config,
     )
 
-    ServiceRegistry.initialize(
+    registry = ServiceRegistry.initialize(
         config=config,
         memory_service=memory_service,
         cache_service=cache_service,
@@ -53,11 +60,34 @@ async def lifespan(app: FastMCP):
         providers=providers,
     )
 
+    # Conditionally create Phase 2 services
+    if config.governance_enabled:
+        registry.governance_service = GovernanceService(
+            db_manager.db["governance_profiles"], config,
+        )
+    if config.rate_limit_enabled:
+        registry.rate_limiter = RateLimiter(
+            db_manager.db["rate_limits"], config,
+        )
+
+    registry.prompt_library = PromptLibrary(
+        db_manager.db["prompts"], config,
+    )
+    registry.decision_service = DecisionService(
+        db_manager.db["decisions"], config,
+    )
+
     # Start enrichment background task
     enrichment_worker = EnrichmentWorker(
         db_manager.db["memories"], config, providers, memory_service,
     )
     enrichment_task = asyncio.create_task(enrichment_worker.run())
+
+    # Start consolidation background task
+    consolidation_worker = ConsolidationWorker(
+        db_manager.db["memories"], config, providers,
+    )
+    consolidation_task = asyncio.create_task(consolidation_worker.run())
 
     # Stage 2: Atlas Search indexes (background, non-blocking)
     search_index_task = asyncio.create_task(
@@ -70,6 +100,7 @@ async def lifespan(app: FastMCP):
 
     # Shutdown
     enrichment_task.cancel()
+    consolidation_task.cancel()
     if not search_index_task.done():
         search_index_task.cancel()
     await audit_service.flush()
@@ -97,7 +128,9 @@ async def _ensure_search_indexes_bg(db, embedding_dimension: int = 1536) -> None
 
 mcp = FastMCP("MongoDB Memory MCP Server", lifespan=lifespan)
 
-# Register all Phase 0 tools
+# Register all tools
 register_memory_tools(mcp)
 register_cache_tools(mcp)
 register_search_tools(mcp)
+register_admin_tools(mcp)
+register_decision_tools(mcp)

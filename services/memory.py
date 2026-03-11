@@ -34,6 +34,17 @@ class MemoryService:
         self.config = config
         self.providers = providers
 
+    def _retention_ttl(self, retention_tier: str) -> timedelta:
+        """Return TTL for a given retention tier."""
+        tier_map = {
+            "critical": timedelta(days=self.config.ltm_retention_critical_days),
+            "reference": timedelta(days=self.config.ltm_retention_reference_days),
+            "standard": timedelta(days=self.config.ltm_retention_standard_days),
+            "temporary": timedelta(days=self.config.ltm_retention_temporary_days),
+            "ephemeral": timedelta(hours=self.config.stm_ttl_hours),
+        }
+        return tier_map.get(retention_tier, timedelta(days=self.config.ltm_retention_standard_days))
+
     def _base_filter(self, user_id: str, **extra) -> dict:
         """Base filter injecting user isolation and soft-delete exclusion."""
         f: dict = {"user_id": user_id, "deleted_at": None}
@@ -78,7 +89,7 @@ class MemoryService:
                 "enrichment_retries": 0,
                 "created_at": now,
                 "updated_at": now,
-                "expires_at": now + timedelta(hours=self.config.stm_ttl_hours),
+                "expires_at": now + self._retention_ttl("ephemeral"),
                 "deleted_at": None,
                 "is_deleted": False,
                 "metadata": msg.get("metadata", {}),
@@ -115,8 +126,7 @@ class MemoryService:
                     "enrichment_retries": 0,
                     "created_at": ltm_now,
                     "updated_at": ltm_now,
-                    "expires_at": ltm_now
-                    + timedelta(days=self.config.ltm_retention_standard_days),
+                    "expires_at": ltm_now + self._retention_ttl("standard"),
                     "deleted_at": None,
                     "is_deleted": False,
                     "metadata": msg.get("metadata", {}),
@@ -389,9 +399,7 @@ class MemoryService:
                 "merge_target_id": top["_id"],
                 "created_at": now,
                 "updated_at": now,
-                "expires_at": now + timedelta(
-                    days=self.config.ltm_retention_standard_days
-                ),
+                "expires_at": now + self._retention_ttl("standard"),
                 "deleted_at": None,
                 "is_deleted": False,
                 "metadata": {},

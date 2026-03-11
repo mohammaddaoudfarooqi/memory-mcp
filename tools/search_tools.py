@@ -13,7 +13,7 @@ def register_search_tools(mcp):
         name="hybrid_search",
         description=(
             "Combined vector + full-text search over memories using "
-            "Reciprocal Rank Fusion (RRF)."
+            "MongoDB $rankFusion for Reciprocal Rank Fusion (RRF)."
         ),
     )
     async def hybrid_search(
@@ -33,28 +33,14 @@ def register_search_tools(mcp):
             tiers = tier or ["stm", "ltm"]
             query_embedding = await svc.providers.embedding.generate_embedding(query)
 
-            # Pipeline 1: Vector search
+            # Vector search filter
             vs_filter = {"user_id": user_id, "deleted_at": None, "tier": {"$in": tiers}}
             if memory_type:
                 vs_filter["memory_type"] = memory_type
             if tags:
                 vs_filter["tags"] = {"$all": tags}
 
-            vector_pipeline = [
-                {
-                    "$vectorSearch": {
-                        "index": "memories_vector_index",
-                        "path": "embedding",
-                        "queryVector": query_embedding,
-                        "numCandidates": 100,
-                        "limit": 20,
-                        "filter": vs_filter,
-                    }
-                },
-                {"$addFields": {"vs_score": {"$meta": "vectorSearchScore"}}},
-            ]
-
-            # Pipeline 2: Full-text search
+            # Full-text search filter clauses
             fts_filter_clauses = [
                 {"equals": {"path": "user_id", "value": user_id}},
                 {"equals": {"path": "is_deleted", "value": False}},
@@ -64,56 +50,70 @@ def register_search_tools(mcp):
                     {"in": {"path": "tier", "value": tiers}}
                 )
 
-            fts_pipeline = [
+            # Build $rankFusion pipeline
+            pipeline = [
                 {
-                    "$search": {
-                        "index": "memories_fts_index",
-                        "compound": {
-                            "must": [
-                                {"text": {"query": query, "path": ["content", "summary"]}}
-                            ],
-                            "filter": fts_filter_clauses,
+                    "$rankFusion": {
+                        "input": {
+                            "pipelines": {
+                                "vectorPipeline": [
+                                    {
+                                        "$vectorSearch": {
+                                            "index": "memories_vector_index",
+                                            "path": "embedding",
+                                            "queryVector": query_embedding,
+                                            "numCandidates": 100,
+                                            "limit": 20,
+                                            "filter": vs_filter,
+                                        }
+                                    },
+                                ],
+                                "fullTextPipeline": [
+                                    {
+                                        "$search": {
+                                            "index": "memories_fts_index",
+                                            "compound": {
+                                                "must": [
+                                                    {"text": {"query": query, "path": ["content", "summary"]}}
+                                                ],
+                                                "filter": fts_filter_clauses,
+                                            },
+                                        }
+                                    },
+                                    {"$limit": 20},
+                                ],
+                            }
+                        },
+                        "combination": {
+                            "weights": {
+                                "vectorPipeline": config.rrf_vector_weight,
+                                "fullTextPipeline": config.rrf_text_weight,
+                            },
                         },
                     }
                 },
-                {"$limit": 20},
-                {"$addFields": {"fts_score": {"$meta": "searchScore"}}},
+                {"$limit": limit},
+                {
+                    "$project": {
+                        "embedding": 0,
+                    }
+                },
             ]
 
-            # Execute concurrently
             memories_col = (await _get_db())["memories"]
+            cursor = await memories_col.aggregate(pipeline)
+            results = await cursor.to_list(None)
 
-            async def _run_pipeline(collection, pipeline):
-                cursor = await collection.aggregate(pipeline)
-                return await cursor.to_list(None)
-
-            vector_results, fts_results = await asyncio.gather(
-                _run_pipeline(memories_col, vector_pipeline),
-                _run_pipeline(memories_col, fts_pipeline),
-            )
-
-            # Application-side RRF merge
-            merged = _rrf_merge(
-                vector_results, fts_results,
-                rrf_k=config.rrf_k,
-                vector_weight=config.rrf_vector_weight,
-                text_weight=config.rrf_text_weight,
-                limit=limit,
-            )
-
-            # Strip embeddings and sanitize BSON types for JSON serialization
-            for r in merged:
-                r.pop("embedding", None)
-                r.pop("vs_score", None)
-                r.pop("fts_score", None)
+            # Sanitize BSON types for JSON serialization
+            for r in results:
                 _sanitize_doc(r)
 
             duration_ms = int((time.time() - start) * 1000)
             await svc.audit_service.log(
                 user_id, "search", "hybrid_search", "success", duration_ms,
-                query=query, result_count=len(merged),
+                query=query, result_count=len(results),
             )
-            return {"results": merged, "count": len(merged)}
+            return {"results": results, "count": len(results)}
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             await svc.audit_service.log(
@@ -163,36 +163,6 @@ async def _get_db():
     from memory_mcp.core.database import DatabaseManager
 
     return (await DatabaseManager.get_instance()).db
-
-
-def _rrf_merge(
-    vector_results: list[dict],
-    fts_results: list[dict],
-    rrf_k: int = 60,
-    vector_weight: float = 1.0,
-    text_weight: float = 0.7,
-    limit: int = 10,
-) -> list[dict]:
-    """Merge two ranked result lists using Reciprocal Rank Fusion."""
-    scores: dict = {}
-    docs: dict = {}
-
-    for rank, doc in enumerate(vector_results):
-        doc_id = doc["_id"]
-        rrf_score = vector_weight / (rrf_k + rank + 1)
-        importance_boost = 1 + doc.get("importance", 0.5) * 0.1
-        scores[doc_id] = scores.get(doc_id, 0) + rrf_score * importance_boost
-        docs[doc_id] = doc
-
-    for rank, doc in enumerate(fts_results):
-        doc_id = doc["_id"]
-        rrf_score = text_weight / (rrf_k + rank + 1)
-        importance_boost = 1 + doc.get("importance", 0.5) * 0.1
-        scores[doc_id] = scores.get(doc_id, 0) + rrf_score * importance_boost
-        docs[doc_id] = doc
-
-    sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
-    return [docs[doc_id] for doc_id in sorted_ids[:limit]]
 
 
 def _sanitize_doc(doc: dict) -> None:

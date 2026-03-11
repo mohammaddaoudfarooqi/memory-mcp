@@ -33,7 +33,7 @@ class TestMCPConfigDefaults:
         config = _make_config()
         assert config.app_name == "memory-mcp"
         assert config.app_version == "3.2.0"
-        assert config.port == 8080
+        assert config.port == 8000
         assert config.debug is False
 
     def test_mongodb_defaults(self):
@@ -76,7 +76,7 @@ class TestMCPConfigDefaults:
         assert config.rrf_k == 60
         assert config.rrf_vector_weight == 1.0
         assert config.rrf_text_weight == 0.7
-        assert config.rrf_single_pipeline is False
+        assert not hasattr(config, "rrf_single_pipeline")
 
     def test_query_limit_defaults(self):
         config = _make_config()
@@ -106,15 +106,18 @@ class TestMCPConfigDefaults:
         config = _make_config()
         assert config.soft_delete_purge_days == 30
 
-    def test_feature_flag_defaults(self):
+    def test_feature_flags_removed(self):
         config = _make_config()
-        assert config.use_new_memory_service is True
-        assert config.use_new_cache_service is True
-        assert config.use_new_search_service is True
+        assert not hasattr(config, "use_new_memory_service")
+        assert not hasattr(config, "use_new_cache_service")
+        assert not hasattr(config, "use_new_search_service")
 
     def test_auth_defaults_disabled(self):
         config = _make_config()
         assert config.auth_enabled is False
+        assert config.auth_secret == ""
+        assert config.auth_token_expiry_seconds == 86400
+        assert not hasattr(config, "auth_jwks_url")
         assert config.governance_enabled is False
         assert config.rate_limit_enabled is False
 

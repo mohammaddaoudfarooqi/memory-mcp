@@ -9,6 +9,10 @@ the canonical reference for the database schema.
 MEMORIES: str = "memories"
 SEMANTIC_CACHE: str = "semantic_cache"
 AUDIT_LOG: str = "audit_log"
+RATE_LIMITS: str = "rate_limits"
+GOVERNANCE_PROFILES: str = "governance_profiles"
+PROMPTS: str = "prompts"
+DECISIONS: str = "decisions"
 
 # ─── Standard (B-tree) Indexes ───────────────────────────────────
 #
@@ -67,6 +71,31 @@ STANDARD_INDEXES: list[dict] = [
         "keys": [("timestamp", 1)],
         "name": "ix_audit_ttl",
         "kwargs": {"expireAfterSeconds": 365 * 86400},
+    },
+    # -- rate_limits --
+    {
+        "collection": RATE_LIMITS,
+        "keys": [("timestamp", 1)],
+        "name": "ix_rate_limits_ttl",
+        "kwargs": {"expireAfterSeconds": 86400},  # 24 hours
+    },
+    {
+        "collection": RATE_LIMITS,
+        "keys": [("user_id", 1), ("operation", 1), ("timestamp", -1)],
+        "name": "ix_rate_limits_user_op",
+    },
+    # -- decisions --
+    {
+        "collection": DECISIONS,
+        "keys": [("expires_at", 1)],
+        "name": "ix_decisions_ttl",
+        "kwargs": {"expireAfterSeconds": 0},
+    },
+    {
+        "collection": DECISIONS,
+        "keys": [("user_id", 1), ("key", 1)],
+        "name": "ix_decisions_user_key",
+        "kwargs": {"unique": True},
     },
 ]
 

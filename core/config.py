@@ -13,7 +13,7 @@ class MCPConfig(BaseSettings):
     # Server
     app_name: str = "memory-mcp"
     app_version: str = "3.2.0"
-    port: int = 8080
+    port: int = 8000
     debug: bool = False
 
     # MongoDB
@@ -64,7 +64,6 @@ class MCPConfig(BaseSettings):
     rrf_k: int = 60
     rrf_vector_weight: float = 1.0
     rrf_text_weight: float = 0.7
-    rrf_single_pipeline: bool = False
 
     # Query Limits
     max_results_per_query: int = 100
@@ -97,15 +96,11 @@ class MCPConfig(BaseSettings):
     # Soft Delete
     soft_delete_purge_days: int = 30
 
-    # Migration Feature Flags
-    use_new_memory_service: bool = True
-    use_new_cache_service: bool = True
-    use_new_search_service: bool = True
-
     # Identity & Auth (Phase 2)
     auth_enabled: bool = False
     auth_token_header: str = "Authorization"
-    auth_jwks_url: str | None = None
+    auth_secret: str = ""
+    auth_token_expiry_seconds: int = 86400
     auth_user_id_claim: str = "sub"
     auth_role_claim: str = "role"
     auth_default_role: str = "end_user"
@@ -116,9 +111,11 @@ class MCPConfig(BaseSettings):
     governance_cache_ttl_seconds: int = 300
     rate_limit_enabled: bool = False
     rate_limit_window_seconds: int = 60
+    rate_limit_max_requests: int = 100
 
     # Prompt Library (Phase 2)
     prompt_experiment_enabled: bool = False
+    prompt_cache_ttl_seconds: int = 300
 
     # Decision Stickiness (Phase 2)
     decision_stickiness_enabled: bool = False

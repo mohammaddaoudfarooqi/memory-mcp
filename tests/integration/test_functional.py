@@ -138,8 +138,12 @@ def test_list_tools():
     result = _post("tools/list")
     tools = result.get("tools", [])
     tool_names = {t["name"] for t in tools}
-    expected = {"store_memory", "recall_memory", "delete_memory",
-                "check_cache", "store_cache", "hybrid_search", "search_web"}
+    expected = {
+        "store_memory", "recall_memory", "delete_memory",
+        "check_cache", "store_cache", "hybrid_search", "search_web",
+        "memory_health", "wipe_user_data", "cache_invalidate",
+        "store_decision", "recall_decision",
+    }
     assert expected == tool_names, f"Tool mismatch.\n  Expected: {expected}\n  Got:      {tool_names}"
 
     for t in sorted(tools, key=lambda x: x["name"]):
@@ -574,6 +578,126 @@ def test_memory_evolution():
     return True
 
 
+# ─── Phase 10: Admin tools ──────────────────────────────────────
+
+
+def test_admin_tools():
+    """Test memory_health, cache_invalidate, and wipe_user_data."""
+    _banner("PHASE 10: Admin Tools")
+
+    # memory_health
+    _subheading("memory_health")
+    result = _call_tool("memory_health", {"user_id": USER_ID})
+    assert "error" not in result, f"memory_health error: {result}"
+    assert "total_memories" in result, f"Missing total_memories: {result}"
+    print(f"  Total memories: {result['total_memories']}")
+    print(f"  Tier stats   : {result.get('tier_stats', {})}")
+    print(f"  Enrichment   : {result.get('enrichment_stats', {})}")
+
+    # cache_invalidate (pattern-based)
+    _subheading("cache_invalidate (pattern)")
+    result = _call_tool("cache_invalidate", {
+        "user_id": f"admin-test-{uuid.uuid4().hex[:8]}",
+        "invalidate_all": True,
+    })
+    assert "error" not in result, f"cache_invalidate error: {result}"
+    print(f"  Deleted: {result.get('deleted_count', 0)} cache entries")
+
+    # wipe_user_data — requires confirm, test refusal first
+    _subheading("wipe_user_data (no confirm)")
+    wipe_user = f"wipe-test-{uuid.uuid4().hex[:8]}"
+    result = _call_tool("wipe_user_data", {
+        "user_id": wipe_user,
+        "confirm": False,
+    })
+    assert "error" in result, "wipe_user_data should reject without confirm"
+    print(f"  Correctly rejected: {result['error'][:60]}")
+
+    # wipe_user_data — with confirm on a disposable user
+    _subheading("wipe_user_data (with confirm)")
+    # Store a memory for the wipe user first
+    _call_tool("store_memory", {
+        "user_id": wipe_user,
+        "conversation_id": f"conv-wipe-{uuid.uuid4().hex[:5]}",
+        "messages": [
+            {"content": "This is a test memory for wipe.", "message_type": "human"},
+        ],
+    })
+    time.sleep(0.5)
+    result = _call_tool("wipe_user_data", {
+        "user_id": wipe_user,
+        "confirm": True,
+    })
+    assert "error" not in result, f"wipe_user_data error: {result}"
+    print(f"  Memories deleted: {result.get('memories_deleted', 0)}")
+    print(f"  Cache deleted   : {result.get('cache_deleted', 0)}")
+    print(f"  Audit deleted   : {result.get('audit_deleted', 0)}")
+
+    return True
+
+
+# ─── Phase 11: Decision stickiness ─────────────────────────────
+
+
+def test_decision_tools():
+    """Test store_decision and recall_decision."""
+    _banner("PHASE 11: Decision Stickiness")
+    decision_user = f"decision-user-{uuid.uuid4().hex[:8]}"
+
+    # Store a decision
+    _subheading("store_decision")
+    result = _call_tool("store_decision", {
+        "user_id": decision_user,
+        "key": "editor",
+        "value": "vim",
+        "ttl_days": 30,
+    })
+    assert "error" not in result, f"store_decision error: {result}"
+    assert result.get("action") in ("stored", "updated"), f"Unexpected action: {result}"
+    print(f"  Action: {result['action']}, key: {result.get('key')}")
+
+    # Recall the decision
+    _subheading("recall_decision (found)")
+    result = _call_tool("recall_decision", {
+        "user_id": decision_user,
+        "key": "editor",
+    })
+    assert "error" not in result, f"recall_decision error: {result}"
+    assert result.get("found") is True, f"Expected found=True: {result}"
+    assert result["decision"]["value"] == "vim", f"Expected value=vim: {result}"
+    print(f"  Found: {result['decision']['value']}")
+
+    # Update the decision
+    _subheading("store_decision (update)")
+    result = _call_tool("store_decision", {
+        "user_id": decision_user,
+        "key": "editor",
+        "value": "emacs",
+    })
+    assert result.get("action") in ("stored", "updated"), f"Unexpected action: {result}"
+    print(f"  Action: {result['action']}, key: {result.get('key')}")
+
+    # Recall updated decision
+    _subheading("recall_decision (updated)")
+    result = _call_tool("recall_decision", {
+        "user_id": decision_user,
+        "key": "editor",
+    })
+    assert result["decision"]["value"] == "emacs", f"Expected value=emacs: {result}"
+    print(f"  Updated value: {result['decision']['value']}")
+
+    # Recall non-existent decision
+    _subheading("recall_decision (not found)")
+    result = _call_tool("recall_decision", {
+        "user_id": decision_user,
+        "key": "nonexistent_key",
+    })
+    assert result.get("found") is False, f"Expected found=False: {result}"
+    print(f"  Correctly returned not found")
+
+    return True
+
+
 # ─── Runner ───────────────────────────────────────────────────────
 
 
@@ -581,7 +705,7 @@ def run_all():
     """Run the comprehensive functional test suite."""
     passed = 0
     failed = 0
-    total_steps = 10
+    total_steps = 12
 
     _banner(f"COMPREHENSIVE FUNCTIONAL TEST SUITE")
     print(f"  Target : http://{MCP_HOST}:{MCP_PORT}{MCP_ENDPOINT}")
@@ -699,6 +823,28 @@ def run_all():
     print(f"\n[{step}/{total_steps}] Memory evolution verification")
     try:
         test_memory_evolution()
+        passed += 1
+        print("\n  >> PASS")
+    except Exception as e:
+        failed += 1
+        print(f"  >> FAIL: {e}")
+
+    # --- Step 11: Admin tools ---
+    step = 11
+    print(f"\n[{step}/{total_steps}] Admin tools (memory_health, cache_invalidate, wipe_user_data)")
+    try:
+        test_admin_tools()
+        passed += 1
+        print("\n  >> PASS")
+    except Exception as e:
+        failed += 1
+        print(f"  >> FAIL: {e}")
+
+    # --- Step 12: Decision stickiness ---
+    step = 12
+    print(f"\n[{step}/{total_steps}] Decision stickiness (store_decision, recall_decision)")
+    try:
+        test_decision_tools()
         passed += 1
         print("\n  >> PASS")
     except Exception as e:

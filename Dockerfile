@@ -15,6 +15,7 @@ COPY core/ core/
 COPY providers/ providers/
 COPY services/ services/
 COPY tools/ tools/
+COPY auth/ auth/
 COPY utils/ utils/
 
 RUN pip install --no-cache-dir .

@@ -201,84 +201,163 @@ class TestStoreCache:
 # ─── Search Tools ───────────────────────────────────────────────
 
 
-class TestRRFMerge:
-    """TC-050: _rrf_merge merges and ranks results correctly."""
+class TestRankFusionPipeline:
+    """TC-050: $rankFusion pipeline builds correctly."""
 
-    def test_rrf_merge_basic(self):
-        from memory_mcp.tools.search_tools import _rrf_merge
+    async def test_rankfusion_pipeline_structure(self):
+        """$rankFusion pipeline contains vectorPipeline and fullTextPipeline."""
+        reg = _make_registry()
 
-        vector = [
-            {"_id": "a", "content": "doc a", "importance": 0.8},
-            {"_id": "b", "content": "doc b", "importance": 0.5},
-        ]
-        fts = [
-            {"_id": "b", "content": "doc b", "importance": 0.5},
-            {"_id": "c", "content": "doc c", "importance": 0.6},
-        ]
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
 
-        merged = _rrf_merge(vector, fts, rrf_k=60, vector_weight=1.0, text_weight=0.7, limit=10)
+        from memory_mcp.tools.search_tools import register_search_tools
+        register_search_tools(mcp_mock)
 
-        ids = [doc["_id"] for doc in merged]
-        assert "b" in ids
-        assert "a" in ids
-        assert "c" in ids
-        assert len(merged) == 3
-        # 'b' appears in both lists so should score highest
-        assert ids[0] == "b"
+        mock_col = MagicMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.to_list = AsyncMock(return_value=[])
+        mock_col.aggregate = AsyncMock(return_value=mock_cursor)
 
-    def test_rrf_merge_respects_limit(self):
-        from memory_mcp.tools.search_tools import _rrf_merge
+        mock_db = MagicMock()
+        mock_db.__getitem__ = MagicMock(return_value=mock_col)
 
-        vector = [{"_id": f"v{i}", "importance": 0.5} for i in range(10)]
-        fts = [{"_id": f"f{i}", "importance": 0.5} for i in range(10)]
+        with patch.object(ServiceRegistry, "get", return_value=reg), \
+             patch("memory_mcp.tools.search_tools._get_db", new_callable=AsyncMock, return_value=mock_db):
+            await tools["hybrid_search"](user_id="user1", query="test query")
 
-        merged = _rrf_merge(vector, fts, limit=5)
-        assert len(merged) == 5
+        pipeline = mock_col.aggregate.call_args[0][0]
+        rank_fusion = pipeline[0]["$rankFusion"]
+        assert "vectorPipeline" in rank_fusion["input"]["pipelines"]
+        assert "fullTextPipeline" in rank_fusion["input"]["pipelines"]
 
-    def test_rrf_merge_empty_inputs(self):
-        from memory_mcp.tools.search_tools import _rrf_merge
+    async def test_rankfusion_respects_config_weights(self):
+        """$rankFusion combination weights match config values."""
+        config = _make_config(rrf_vector_weight=0.6, rrf_text_weight=0.4)
+        reg = _make_registry(config=config)
 
-        merged = _rrf_merge([], [])
-        assert merged == []
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
 
-    def test_rrf_importance_boost(self):
-        """Higher importance docs should score higher at same rank."""
-        from memory_mcp.tools.search_tools import _rrf_merge
+        from memory_mcp.tools.search_tools import register_search_tools
+        register_search_tools(mcp_mock)
 
-        vector_high = [{"_id": "high", "importance": 1.0}]
-        vector_low = [{"_id": "low", "importance": 0.1}]
+        mock_col = MagicMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.to_list = AsyncMock(return_value=[])
+        mock_col.aggregate = AsyncMock(return_value=mock_cursor)
 
-        merged = _rrf_merge(vector_high + vector_low, [], rrf_k=60)
-        ids = [doc["_id"] for doc in merged]
-        assert ids[0] == "high"
+        mock_db = MagicMock()
+        mock_db.__getitem__ = MagicMock(return_value=mock_col)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg), \
+             patch("memory_mcp.tools.search_tools._get_db", new_callable=AsyncMock, return_value=mock_db):
+            await tools["hybrid_search"](user_id="user1", query="test")
+
+        pipeline = mock_col.aggregate.call_args[0][0]
+        weights = pipeline[0]["$rankFusion"]["combination"]["weights"]
+        assert weights["vectorPipeline"] == 0.6
+        assert weights["fullTextPipeline"] == 0.4
+
+    async def test_rankfusion_respects_limit(self):
+        """$rankFusion pipeline includes $limit stage matching requested limit."""
+        reg = _make_registry()
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+
+        from memory_mcp.tools.search_tools import register_search_tools
+        register_search_tools(mcp_mock)
+
+        mock_col = MagicMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.to_list = AsyncMock(return_value=[])
+        mock_col.aggregate = AsyncMock(return_value=mock_cursor)
+
+        mock_db = MagicMock()
+        mock_db.__getitem__ = MagicMock(return_value=mock_col)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg), \
+             patch("memory_mcp.tools.search_tools._get_db", new_callable=AsyncMock, return_value=mock_db):
+            await tools["hybrid_search"](user_id="user1", query="test", limit=7)
+
+        pipeline = mock_col.aggregate.call_args[0][0]
+        assert pipeline[1] == {"$limit": 7}
+
+    async def test_rankfusion_includes_project_stage(self):
+        """$rankFusion pipeline includes $project to exclude embedding."""
+        reg = _make_registry()
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+
+        from memory_mcp.tools.search_tools import register_search_tools
+        register_search_tools(mcp_mock)
+
+        mock_col = MagicMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.to_list = AsyncMock(return_value=[])
+        mock_col.aggregate = AsyncMock(return_value=mock_cursor)
+
+        mock_db = MagicMock()
+        mock_db.__getitem__ = MagicMock(return_value=mock_col)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg), \
+             patch("memory_mcp.tools.search_tools._get_db", new_callable=AsyncMock, return_value=mock_db):
+            await tools["hybrid_search"](user_id="user1", query="test")
+
+        pipeline = mock_col.aggregate.call_args[0][0]
+        assert pipeline[2] == {"$project": {"embedding": 0}}
+
+    async def test_rankfusion_combination_has_weights_only(self):
+        """$rankFusion combination contains weights but no rankConstant."""
+        config = _make_config(rrf_vector_weight=0.8, rrf_text_weight=0.4)
+        reg = _make_registry(config=config)
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+
+        from memory_mcp.tools.search_tools import register_search_tools
+        register_search_tools(mcp_mock)
+
+        mock_col = MagicMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.to_list = AsyncMock(return_value=[])
+        mock_col.aggregate = AsyncMock(return_value=mock_cursor)
+
+        mock_db = MagicMock()
+        mock_db.__getitem__ = MagicMock(return_value=mock_col)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg), \
+             patch("memory_mcp.tools.search_tools._get_db", new_callable=AsyncMock, return_value=mock_db):
+            await tools["hybrid_search"](user_id="user1", query="test")
+
+        pipeline = mock_col.aggregate.call_args[0][0]
+        combination = pipeline[0]["$rankFusion"]["combination"]
+        assert combination["weights"]["vectorPipeline"] == 0.8
+        assert combination["weights"]["fullTextPipeline"] == 0.4
+        assert "rankConstant" not in combination
 
 
 class TestHybridSearch:
-    """TC-051: hybrid_search tool executes two pipelines and merges."""
+    """TC-051: hybrid_search tool executes $rankFusion pipeline."""
 
     async def test_hybrid_search_success(self):
         reg = _make_registry()
 
-        mcp = MagicMock()
-        tools = _capture_tool(mcp)
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
 
         from memory_mcp.tools.search_tools import register_search_tools
-        register_search_tools(mcp)
+        register_search_tools(mcp_mock)
 
-        # Mock the database collection for aggregate calls
         mock_col = MagicMock()
-        mock_cursor_v = AsyncMock()
-        mock_cursor_v.to_list = AsyncMock(return_value=[
-            {"_id": "m1", "content": "vector result", "vs_score": 0.9,
-             "importance": 0.7, "embedding": [0.1] * 1536},
+        mock_cursor = AsyncMock()
+        mock_cursor.to_list = AsyncMock(return_value=[
+            {"_id": "m1", "content": "result 1", "importance": 0.7},
+            {"_id": "m2", "content": "result 2", "importance": 0.6},
         ])
-        mock_cursor_f = AsyncMock()
-        mock_cursor_f.to_list = AsyncMock(return_value=[
-            {"_id": "m2", "content": "fts result", "fts_score": 0.8,
-             "importance": 0.6, "embedding": [0.2] * 1536},
-        ])
-        # aggregate returns different cursors for vector vs fts pipeline
-        mock_col.aggregate = AsyncMock(side_effect=[mock_cursor_v, mock_cursor_f])
+        mock_col.aggregate = AsyncMock(return_value=mock_cursor)
 
         mock_db = MagicMock()
         mock_db.__getitem__ = MagicMock(return_value=mock_col)
@@ -292,11 +371,8 @@ class TestHybridSearch:
         assert "results" in result
         assert "count" in result
         assert result["count"] == 2
-        # Embeddings and internal scores should be stripped
-        for r in result["results"]:
-            assert "embedding" not in r
-            assert "vs_score" not in r
-            assert "fts_score" not in r
+        # aggregate called once (single $rankFusion pipeline)
+        assert mock_col.aggregate.call_count == 1
 
 
 class TestSearchWeb:
@@ -498,16 +574,16 @@ class TestSearchWebError:
 
 
 class TestHybridSearchFilters:
-    """hybrid_search applies memory_type and tags filters."""
+    """hybrid_search applies memory_type and tags filters via $rankFusion."""
 
     async def test_hybrid_search_with_memory_type_and_tags(self):
         reg = _make_registry()
 
-        mcp = MagicMock()
-        tools = _capture_tool(mcp)
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
 
         from memory_mcp.tools.search_tools import register_search_tools
-        register_search_tools(mcp)
+        register_search_tools(mcp_mock)
 
         mock_col = MagicMock()
         mock_cursor = AsyncMock()
@@ -525,9 +601,11 @@ class TestHybridSearchFilters:
             )
 
         assert result["count"] == 0
-        # Verify filters were applied to vector pipeline
-        pipeline = mock_col.aggregate.call_args_list[0][0][0]
-        vs_filter = pipeline[0]["$vectorSearch"]["filter"]
+        # Verify filters were applied to vectorSearch inside $rankFusion
+        pipeline = mock_col.aggregate.call_args[0][0]
+        rank_fusion = pipeline[0]["$rankFusion"]
+        vector_pipeline = rank_fusion["input"]["pipelines"]["vectorPipeline"]
+        vs_filter = vector_pipeline[0]["$vectorSearch"]["filter"]
         assert vs_filter.get("memory_type") == "factual"
         assert vs_filter.get("tags") == {"$all": ["topic:ai"]}
 
