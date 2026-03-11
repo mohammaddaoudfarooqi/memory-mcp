@@ -19,6 +19,7 @@ def _make_registry(config=None, decision_enabled=True):
     reg.config = config or _make_config()
     reg.audit_service = AsyncMock()
     reg.audit_service.log = AsyncMock()
+    reg.check_access = AsyncMock(return_value=None)
     if decision_enabled:
         reg.decision_service = AsyncMock()
     else:
@@ -141,3 +142,39 @@ class TestRecallDecision:
             result = await tools["recall_decision"](user_id="user1", key="editor")
 
         assert "error" in result
+
+
+class TestDecisionAccessControl:
+    """Decision tools respect check_access governance/rate-limit checks."""
+
+    async def test_store_decision_blocked(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="rate limited")
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+        from memory_mcp.tools.decision_tools import register_decision_tools
+        register_decision_tools(mcp_mock)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["store_decision"](
+                user_id="user1", key="editor", value="vim",
+            )
+
+        assert result == {"error": "rate limited"}
+        reg.decision_service.store.assert_not_called()
+
+    async def test_recall_decision_blocked(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="not allowed")
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+        from memory_mcp.tools.decision_tools import register_decision_tools
+        register_decision_tools(mcp_mock)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["recall_decision"](user_id="user1", key="editor")
+
+        assert result == {"error": "not allowed"}
+        reg.decision_service.recall.assert_not_called()

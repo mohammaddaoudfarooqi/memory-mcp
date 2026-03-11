@@ -84,6 +84,20 @@ STANDARD_INDEXES: list[dict] = [
         "keys": [("user_id", 1), ("operation", 1), ("timestamp", -1)],
         "name": "ix_rate_limits_user_op",
     },
+    # -- governance_profiles --
+    {
+        "collection": GOVERNANCE_PROFILES,
+        "keys": [("role", 1)],
+        "name": "ix_governance_profiles_role",
+        "kwargs": {"unique": True},
+    },
+    # -- prompts --
+    {
+        "collection": PROMPTS,
+        "keys": [("name", 1), ("version", -1)],
+        "name": "ix_prompts_name_version",
+        "kwargs": {"unique": True},
+    },
     # -- decisions --
     {
         "collection": DECISIONS,

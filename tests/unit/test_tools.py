@@ -26,6 +26,7 @@ def _make_registry(config=None):
     reg.providers = MagicMock()
     reg.providers.embedding = AsyncMock()
     reg.providers.embedding.generate_embedding = AsyncMock(return_value=[0.1] * 1536)
+    reg.check_access = AsyncMock(return_value=None)
     return reg
 
 
@@ -652,3 +653,71 @@ class TestSearchToolsSanitizeDoc:
         doc = {"nested": {"_id": oid}}
         _sanitize_doc(doc)
         assert doc["nested"]["_id"] == str(oid)
+
+
+# ─── Access Control (check_access) ────────────────────────────
+
+
+class TestCheckAccessBlocking:
+    """Verify tools return error dict when check_access denies access."""
+
+    async def test_store_memory_blocked_by_governance(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="Operation 'store_memory' not allowed for role 'end_user'")
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+        from memory_mcp.tools.memory_tools import register_memory_tools
+        register_memory_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["store_memory"](
+                user_id="user1", conversation_id="conv1", messages=[],
+            )
+
+        assert "error" in result
+        assert "not allowed" in result["error"]
+        reg.memory_service.store_stm.assert_not_called()
+
+    async def test_recall_memory_blocked_by_rate_limit(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="Rate limit exceeded for 'recall_memory'")
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+        from memory_mcp.tools.memory_tools import register_memory_tools
+        register_memory_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["recall_memory"](user_id="user1", query="test")
+
+        assert "error" in result
+        assert "Rate limit" in result["error"]
+
+    async def test_check_cache_blocked(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="blocked")
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+        from memory_mcp.tools.cache_tools import register_cache_tools
+        register_cache_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["check_cache"](user_id="user1", query="test")
+
+        assert result == {"error": "blocked"}
+
+    async def test_hybrid_search_blocked(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="blocked")
+
+        mcp = MagicMock()
+        tools = _capture_tool(mcp)
+        from memory_mcp.tools.search_tools import register_search_tools
+        register_search_tools(mcp)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["hybrid_search"](user_id="user1", query="test")
+
+        assert result == {"error": "blocked"}

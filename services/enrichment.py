@@ -16,11 +16,12 @@ class EnrichmentWorker:
     Uses a semaphore to limit concurrent LLM calls.
     """
 
-    def __init__(self, memories_collection, config: MCPConfig, providers, memory_service) -> None:
+    def __init__(self, memories_collection, config: MCPConfig, providers, memory_service, prompt_library=None) -> None:
         self.memories = memories_collection
         self.config = config
         self.providers = providers
         self.memory_service = memory_service
+        self.prompt_library = prompt_library
         self._semaphore = asyncio.Semaphore(config.enrichment_concurrency)
         self._running = False
 
@@ -94,12 +95,34 @@ class EnrichmentWorker:
                 },
             )
 
+    async def _get_prompt(self, name: str) -> str | None:
+        """Get a prompt template from the library, or None if unavailable."""
+        if self.prompt_library is not None:
+            try:
+                return await self.prompt_library.get_prompt(name)
+            except Exception:
+                logger.debug("Failed to get prompt '%s' from library, using default", name)
+        return None
+
     async def _process_standard_enrichment(self, memory: dict) -> None:
         """Standard enrichment: importance, summary, evolution check."""
         memory_id = memory["_id"]
 
-        importance = await self.providers.llm.assess_importance(memory["content"])
-        summary = await self.providers.llm.generate_summary(memory["content"])
+        importance_prompt = await self._get_prompt("importance_assessment")
+        if importance_prompt:
+            importance = await self.providers.llm.assess_importance(
+                memory["content"], prompt=importance_prompt,
+            )
+        else:
+            importance = await self.providers.llm.assess_importance(memory["content"])
+
+        summary_prompt = await self._get_prompt("summary_generation")
+        if summary_prompt:
+            summary = await self.providers.llm.generate_summary(
+                memory["content"], prompt=summary_prompt,
+            )
+        else:
+            summary = await self.providers.llm.generate_summary(memory["content"])
 
         # Memory evolution check
         await self.memory_service.evolve_memory(
@@ -141,18 +164,20 @@ class EnrichmentWorker:
             return
 
         # Ask LLM to merge the two pieces of content
+        merge_prompt_template = await self._get_prompt("merge_prompt")
+        if merge_prompt_template:
+            merge_text = merge_prompt_template.format(
+                memory_1=target["content"], memory_2=memory["content"],
+            )
+        else:
+            merge_text = (
+                "Merge these two related memory entries into a single, "
+                "coherent memory. Preserve all important details.\n\n"
+                f"Memory 1: {target['content']}\n\n"
+                f"Memory 2: {memory['content']}"
+            )
         merged_content = await self.providers.llm.chat(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        "Merge these two related memory entries into a single, "
-                        "coherent memory. Preserve all important details.\n\n"
-                        f"Memory 1: {target['content']}\n\n"
-                        f"Memory 2: {memory['content']}"
-                    ),
-                }
-            ],
+            messages=[{"role": "user", "content": merge_text}],
         )
 
         now = datetime.now(timezone.utc)

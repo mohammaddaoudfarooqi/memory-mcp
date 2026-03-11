@@ -12,7 +12,7 @@ The configuration class is `MCPConfig` in `core/config.py`, built on Pydantic Ba
 |----------|------|----------|---------|-------------|
 | `APP_NAME` | string | No | `memory-mcp` | Application name |
 | `APP_VERSION` | string | No | `3.2.0` | Application version |
-| `PORT` | integer | No | `8080` | Defined in config but **not used** — the server always listens on port 8000 (hardcoded in `__main__.py`) |
+| `PORT` | integer | No | `8000` | Server listen port |
 | `DEBUG` | boolean | No | `false` | Debug mode |
 
 ### MongoDB
@@ -95,7 +95,8 @@ The ranking formula: `score = α·recency + β·importance_boost + γ·relevance
 | `RRF_K` | integer | No | `60` | RRF smoothing constant |
 | `RRF_VECTOR_WEIGHT` | float | No | `1.0` | Weight for vector search results in RRF |
 | `RRF_TEXT_WEIGHT` | float | No | `0.7` | Weight for full-text search results in RRF |
-| `RRF_SINGLE_PIPELINE` | boolean | No | `false` | Use single pipeline mode (skip dual-pipeline RRF) |
+
+> **Note:** Hybrid search always uses MongoDB `$rankFusion`. The weights above are passed to the `$rankFusion` `combination.weights` stage.
 
 ### Query Limits
 
@@ -146,24 +147,18 @@ The ranking formula: `score = α·recency + β·importance_boost + γ·relevance
 | `PROMOTION_ACCESS_THRESHOLD` | integer | No | `2` | Minimum access count for promotion |
 | `PROMOTION_AGE_MINUTES` | integer | No | `60` | Minimum age in minutes for promotion |
 
-### Feature Flags
-
-| Variable | Type | Required | Default | Description |
-|----------|------|----------|---------|-------------|
-| `USE_NEW_MEMORY_SERVICE` | boolean | No | `true` | Use v3.2 memory service |
-| `USE_NEW_CACHE_SERVICE` | boolean | No | `true` | Use v3.2 cache service |
-| `USE_NEW_SEARCH_SERVICE` | boolean | No | `true` | Use v3.2 search service |
-
 ### Identity and Auth (Phase 2)
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `AUTH_ENABLED` | boolean | No | `false` | Enable JWT authentication |
+| `AUTH_SECRET` | string | Conditional | `""` | HS256 signing key for JWT tokens. Required when `AUTH_ENABLED=true` |
+| `AUTH_TOKEN_EXPIRY_SECONDS` | integer | No | `86400` | JWT token expiry (24 hours) |
 | `AUTH_TOKEN_HEADER` | string | No | `Authorization` | HTTP header for auth token |
-| `AUTH_JWKS_URL` | string | No | — | JWKS endpoint for token validation |
 | `AUTH_USER_ID_CLAIM` | string | No | `sub` | JWT claim for user ID |
 | `AUTH_ROLE_CLAIM` | string | No | `role` | JWT claim for user role |
 | `AUTH_DEFAULT_ROLE` | string | No | `end_user` | Role assigned when no role claim present |
+| `MEMORY_MCP_API_KEYS` | string | No | — | Comma-separated API keys in `key=user_id` format |
 
 ### Governance (Phase 2)
 
@@ -174,12 +169,14 @@ The ranking formula: `score = α·recency + β·importance_boost + γ·relevance
 | `GOVERNANCE_CACHE_TTL_SECONDS` | integer | No | `300` | TTL for governance policy cache |
 | `RATE_LIMIT_ENABLED` | boolean | No | `false` | Enable rate limiting |
 | `RATE_LIMIT_WINDOW_SECONDS` | integer | No | `60` | Rate limit window duration |
+| `RATE_LIMIT_MAX_REQUESTS` | integer | No | `100` | Maximum requests per window per user |
 
 ### Experimental (Phase 2)
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `PROMPT_EXPERIMENT_ENABLED` | boolean | No | `false` | Enable prompt library experimentation |
+| `PROMPT_CACHE_TTL_SECONDS` | integer | No | `300` | TTL for prompt template cache |
 | `DECISION_STICKINESS_ENABLED` | boolean | No | `false` | Enable decision stickiness |
 | `DECISION_DEFAULT_TTL_DAYS` | integer | No | `90` | Default TTL for sticky decisions |
 

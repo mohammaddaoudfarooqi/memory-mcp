@@ -6,6 +6,8 @@ from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
 
+from memory_mcp.auth.api_keys import APIKeyManager
+from memory_mcp.auth.token_verifier import MemoryMCPTokenVerifier
 from memory_mcp.core.config import MCPConfig
 from memory_mcp.core.database import DatabaseManager
 from memory_mcp.core.migrations import ensure_indexes, ensure_search_indexes
@@ -27,6 +29,20 @@ from memory_mcp.tools.memory_tools import register_memory_tools
 from memory_mcp.tools.search_tools import register_search_tools
 
 logger = logging.getLogger(__name__)
+
+
+def _build_auth(config: MCPConfig) -> MemoryMCPTokenVerifier | None:
+    """Return a token verifier when auth is enabled, else None."""
+    if not config.auth_enabled:
+        return None
+    if not config.auth_secret:
+        logger.warning("AUTH_ENABLED=true but AUTH_SECRET is empty — auth disabled.")
+        return None
+    api_key_manager = APIKeyManager()
+    return MemoryMCPTokenVerifier(
+        secret=config.auth_secret,
+        api_key_manager=api_key_manager,
+    )
 
 
 @asynccontextmanager
@@ -80,6 +96,7 @@ async def lifespan(app: FastMCP):
     # Start enrichment background task
     enrichment_worker = EnrichmentWorker(
         db_manager.db["memories"], config, providers, memory_service,
+        prompt_library=registry.prompt_library,
     )
     enrichment_task = asyncio.create_task(enrichment_worker.run())
 
@@ -126,7 +143,10 @@ async def _ensure_search_indexes_bg(db, embedding_dimension: int = 1536) -> None
         )
 
 
-mcp = FastMCP("MongoDB Memory MCP Server", lifespan=lifespan)
+_config = MCPConfig()
+_auth = _build_auth(_config)
+
+mcp = FastMCP("MongoDB Memory MCP Server", lifespan=lifespan, auth=_auth)
 
 # Register all tools
 register_memory_tools(mcp)

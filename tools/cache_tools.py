@@ -21,6 +21,9 @@ def register_cache_tools(mcp):
         similarity_threshold: float | None = None,
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "check_cache")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
         try:
             result = await svc.cache_service.check(
@@ -46,6 +49,9 @@ def register_cache_tools(mcp):
     )
     async def store_cache(user_id: str, query: str, response: str) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "store_cache")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
         try:
             cache_id = await svc.cache_service.store(user_id, query, response)

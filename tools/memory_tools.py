@@ -21,6 +21,9 @@ def register_memory_tools(mcp):
         messages: list[dict],
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "store_memory")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
         try:
             stm_ids = await svc.memory_service.store_stm(user_id, conversation_id, messages)
@@ -54,6 +57,9 @@ def register_memory_tools(mcp):
         tier: list[str] | None = None,
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "recall_memory")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
         try:
             results = await svc.memory_service.recall(
@@ -90,6 +96,9 @@ def register_memory_tools(mcp):
         dry_run: bool = False,
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "delete_memory")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
         try:
             result = await svc.memory_service.delete(

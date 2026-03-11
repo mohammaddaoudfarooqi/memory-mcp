@@ -25,6 +25,9 @@ def register_search_tools(mcp):
         tags: list[str] | None = None,
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "hybrid_search")
+        if access_err:
+            return {"error": access_err}
         config = svc.config
         start = time.time()
 
@@ -128,6 +131,9 @@ def register_search_tools(mcp):
     )
     async def search_web(user_id: str, query: str) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "search_web")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
 
         if not svc.config.tavily_api_key:

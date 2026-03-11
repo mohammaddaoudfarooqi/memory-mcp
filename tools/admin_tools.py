@@ -17,6 +17,9 @@ def register_admin_tools(mcp):
     )
     async def memory_health(user_id: str) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "memory_health")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
 
         try:
@@ -80,6 +83,9 @@ def register_admin_tools(mcp):
     )
     async def wipe_user_data(user_id: str, confirm: bool = False) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "wipe_user_data")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
 
         if not confirm:
@@ -131,6 +137,9 @@ def register_admin_tools(mcp):
         invalidate_all: bool = False,
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "cache_invalidate")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
 
         try:

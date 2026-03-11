@@ -22,6 +22,9 @@ def register_decision_tools(mcp):
         ttl_days: int | None = None,
     ) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "store_decision")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
 
         if svc.decision_service is None:
@@ -54,6 +57,9 @@ def register_decision_tools(mcp):
     )
     async def recall_decision(user_id: str, key: str) -> dict:
         svc = ServiceRegistry.get()
+        access_err = await svc.check_access(user_id, "recall_decision")
+        if access_err:
+            return {"error": access_err}
         start = time.time()
 
         if svc.decision_service is None:

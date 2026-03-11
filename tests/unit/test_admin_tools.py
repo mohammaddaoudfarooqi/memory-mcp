@@ -22,6 +22,7 @@ def _make_registry(config=None):
     reg.audit_service = AsyncMock()
     reg.audit_service.log = AsyncMock()
     reg.providers = MagicMock()
+    reg.check_access = AsyncMock(return_value=None)
     return reg
 
 
@@ -254,3 +255,35 @@ class TestCacheInvalidate:
 
         audit_calls = reg.audit_service.log.call_args_list
         assert audit_calls[-1][0][3] == "error"
+
+
+class TestAdminAccessControl:
+    """Admin tools respect check_access governance/rate-limit checks."""
+
+    async def test_memory_health_blocked(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="not allowed")
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+        from memory_mcp.tools.admin_tools import register_admin_tools
+        register_admin_tools(mcp_mock)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["memory_health"](user_id="user1")
+
+        assert result == {"error": "not allowed"}
+
+    async def test_wipe_user_data_blocked(self):
+        reg = _make_registry()
+        reg.check_access = AsyncMock(return_value="not allowed")
+
+        mcp_mock = MagicMock()
+        tools = _capture_tool(mcp_mock)
+        from memory_mcp.tools.admin_tools import register_admin_tools
+        register_admin_tools(mcp_mock)
+
+        with patch.object(ServiceRegistry, "get", return_value=reg):
+            result = await tools["wipe_user_data"](user_id="user1", confirm=True)
+
+        assert result == {"error": "not allowed"}

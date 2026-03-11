@@ -53,3 +53,19 @@ class ServiceRegistry:
         if cls._instance is None:
             raise RuntimeError("ServiceRegistry not initialized.")
         return cls._instance
+
+    async def check_access(self, user_id: str, operation: str, role: str | None = None) -> str | None:
+        """Check governance and rate limits. Returns error string or None if OK."""
+        effective_role = role or (self.config.auth_default_role if self.config else "end_user")
+
+        if self.governance_service is not None:
+            allowed = await self.governance_service.check_allowed(user_id, effective_role, operation)
+            if not allowed:
+                return f"Operation '{operation}' not allowed for role '{effective_role}'"
+
+        if self.rate_limiter is not None:
+            within_limit = await self.rate_limiter.check_rate_limit(user_id, operation)
+            if not within_limit:
+                return f"Rate limit exceeded for '{operation}'"
+
+        return None

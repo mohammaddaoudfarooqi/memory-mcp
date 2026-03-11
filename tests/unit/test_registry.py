@@ -1,8 +1,9 @@
 """Tests for ServiceRegistry singleton."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
+from memory_mcp.core.config import MCPConfig
 from memory_mcp.core.registry import ServiceRegistry
 
 
@@ -58,3 +59,82 @@ class TestServiceRegistryGet:
         reg1 = ServiceRegistry.get()
         reg2 = ServiceRegistry.get()
         assert reg1 is reg2
+
+
+class TestCheckAccess:
+    """check_access integrates governance and rate limiting."""
+
+    async def test_no_governance_no_rate_limit_returns_none(self):
+        config = MCPConfig(
+            mongodb_connection_string="mongodb://localhost:27017",
+            _env_file=None,
+        )
+        reg = ServiceRegistry.initialize(
+            config=config,
+            memory_service=MagicMock(),
+            cache_service=MagicMock(),
+            audit_service=MagicMock(),
+            providers=MagicMock(),
+        )
+        # governance_service and rate_limiter default to None
+        result = await reg.check_access("user1", "store_memory")
+        assert result is None
+
+    async def test_governance_blocks_returns_error(self):
+        config = MCPConfig(
+            mongodb_connection_string="mongodb://localhost:27017",
+            _env_file=None,
+        )
+        reg = ServiceRegistry.initialize(
+            config=config,
+            memory_service=MagicMock(),
+            cache_service=MagicMock(),
+            audit_service=MagicMock(),
+            providers=MagicMock(),
+        )
+        reg.governance_service = AsyncMock()
+        reg.governance_service.check_allowed = AsyncMock(return_value=False)
+
+        result = await reg.check_access("user1", "store_memory")
+        assert result is not None
+        assert "not allowed" in result
+
+    async def test_rate_limiter_blocks_returns_error(self):
+        config = MCPConfig(
+            mongodb_connection_string="mongodb://localhost:27017",
+            _env_file=None,
+        )
+        reg = ServiceRegistry.initialize(
+            config=config,
+            memory_service=MagicMock(),
+            cache_service=MagicMock(),
+            audit_service=MagicMock(),
+            providers=MagicMock(),
+        )
+        reg.rate_limiter = AsyncMock()
+        reg.rate_limiter.check_rate_limit = AsyncMock(return_value=False)
+
+        result = await reg.check_access("user1", "store_memory")
+        assert result is not None
+        assert "Rate limit" in result
+
+    async def test_governance_passes_rate_limit_blocks(self):
+        config = MCPConfig(
+            mongodb_connection_string="mongodb://localhost:27017",
+            _env_file=None,
+        )
+        reg = ServiceRegistry.initialize(
+            config=config,
+            memory_service=MagicMock(),
+            cache_service=MagicMock(),
+            audit_service=MagicMock(),
+            providers=MagicMock(),
+        )
+        reg.governance_service = AsyncMock()
+        reg.governance_service.check_allowed = AsyncMock(return_value=True)
+        reg.rate_limiter = AsyncMock()
+        reg.rate_limiter.check_rate_limit = AsyncMock(return_value=False)
+
+        result = await reg.check_access("user1", "store_memory")
+        assert result is not None
+        assert "Rate limit" in result
