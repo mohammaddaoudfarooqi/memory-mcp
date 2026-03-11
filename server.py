@@ -1,0 +1,103 @@
+"""FastMCP server with lifespan integration for Memory-MCP v3.2."""
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+from fastmcp import FastMCP
+
+from memory_mcp.core.config import MCPConfig
+from memory_mcp.core.database import DatabaseManager
+from memory_mcp.core.migrations import ensure_indexes, ensure_search_indexes
+from memory_mcp.core.registry import ServiceRegistry
+from memory_mcp.providers.manager import ProviderManager
+from memory_mcp.services.audit import AuditService
+from memory_mcp.services.cache import CacheService
+from memory_mcp.services.enrichment import EnrichmentWorker
+from memory_mcp.services.memory import MemoryService
+from memory_mcp.tools.cache_tools import register_cache_tools
+from memory_mcp.tools.memory_tools import register_memory_tools
+from memory_mcp.tools.search_tools import register_search_tools
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastMCP):
+    """Initialize all services at startup, tear down on shutdown."""
+    # Startup
+    config = MCPConfig()
+    db_manager = await DatabaseManager.initialize(config)
+
+    # Stage 1: Standard indexes (fast, blocking)
+    await ensure_indexes(db_manager.db)
+    logger.info("Standard indexes ensured.")
+
+    providers = ProviderManager(config)
+
+    memory_service = MemoryService(
+        db_manager.db["memories"], config, providers,
+    )
+    cache_service = CacheService(
+        db_manager.db["cache"], config, providers.embedding,
+    )
+    audit_service = AuditService(
+        db_manager.db["audit_log"], config,
+    )
+
+    ServiceRegistry.initialize(
+        config=config,
+        memory_service=memory_service,
+        cache_service=cache_service,
+        audit_service=audit_service,
+        providers=providers,
+    )
+
+    # Start enrichment background task
+    enrichment_worker = EnrichmentWorker(
+        db_manager.db["memories"], config, providers, memory_service,
+    )
+    enrichment_task = asyncio.create_task(enrichment_worker.run())
+
+    # Stage 2: Atlas Search indexes (background, non-blocking)
+    search_index_task = asyncio.create_task(
+        _ensure_search_indexes_bg(db_manager.db, config.embedding_dimension)
+    )
+
+    logger.info("Memory-MCP v%s started", config.app_version)
+
+    yield
+
+    # Shutdown
+    enrichment_task.cancel()
+    if not search_index_task.done():
+        search_index_task.cancel()
+    await audit_service.flush()
+    await db_manager.close()
+    logger.info("Memory-MCP shut down")
+
+
+async def _ensure_search_indexes_bg(db, embedding_dimension: int = 1536) -> None:
+    """Background wrapper for Atlas Search index creation.
+
+    Exceptions are logged but never propagated — search index creation
+    is non-fatal.
+    """
+    try:
+        await ensure_search_indexes(db, embedding_dimension=embedding_dimension)
+        logger.info("Atlas Search indexes ready.")
+    except asyncio.CancelledError:
+        logger.debug("Atlas Search index creation cancelled (server shutting down).")
+    except Exception:
+        logger.warning(
+            "Atlas Search index creation failed (non-fatal).",
+            exc_info=True,
+        )
+
+
+mcp = FastMCP("MongoDB Memory MCP Server", lifespan=lifespan)
+
+# Register all Phase 0 tools
+register_memory_tools(mcp)
+register_cache_tools(mcp)
+register_search_tools(mcp)

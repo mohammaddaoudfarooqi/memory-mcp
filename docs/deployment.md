@@ -1,0 +1,150 @@
+# Deployment Guide
+
+## Prerequisites
+
+- Docker and Docker Compose
+- A MongoDB Atlas cluster with vector search enabled
+- AWS credentials with Bedrock access (for default embedding/LLM providers)
+
+## Environment Variables
+
+Create a `.env` file in the project root. At minimum:
+
+```bash
+MONGODB_CONNECTION_STRING=mongodb+srv://user:password@cluster.mongodb.net/memory_mcp
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_REGION=us-east-1
+```
+
+See [configuration.md](configuration.md) for the complete variable reference.
+
+## Deploy with Docker Compose
+
+```bash
+docker compose up -d
+```
+
+This builds the image from the `Dockerfile` and starts the `memory-mcp` service. The compose file loads variables from `.env` automatically.
+
+### Docker Compose configuration
+
+From `docker-compose.yml`:
+
+- **Image**: Built from the project `Dockerfile` (Python 3.11-slim)
+- **Network**: `memory-mcp-network` (bridge driver)
+- **Memory limit**: 2 GB
+- **Restart policy**: `unless-stopped`
+- **Health check**: HTTP GET to `/mcp` on port 8000 (accepts 200, 401, or 405 status codes)
+  - Interval: 30s
+  - Timeout: 10s
+  - Retries: 3
+  - Start period: 60s
+
+### Dockerfile
+
+The image uses `python:3.11-slim`:
+
+1. Installs `build-essential` for native dependencies
+2. Copies source files and `pyproject.toml`
+3. Runs `pip install --no-cache-dir .`
+4. Exposes port 8000
+5. Runs the `memory-mcp` command
+
+## Deploy without Docker
+
+Install the package and run directly:
+
+```bash
+pip install .
+memory-mcp
+```
+
+The server listens on `0.0.0.0:8000` with Streamable HTTP transport.
+
+## Verify Deployment
+
+Check that the server is running:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/mcp
+```
+
+A response code of `200`, `401`, or `405` indicates the server is up.
+
+Check container health:
+
+```bash
+docker compose ps
+```
+
+The `STATUS` column shows `healthy` when the health check passes.
+
+View logs:
+
+```bash
+docker compose logs -f memory-mcp
+```
+
+## MongoDB Atlas Setup
+
+Memory-MCP requires a MongoDB Atlas cluster with the following:
+
+1. **Database**: `memory_mcp` (or the name set in `MONGODB_DATABASE_NAME`)
+2. **Collections**: Created automatically on first use: `memories`, `semantic_cache`, `audit_log`
+3. **Standard indexes**: Created automatically at server startup (Stage 1)
+4. **Atlas Search indexes**: Created automatically in the background (Stage 2). Three indexes:
+   - `memories_vector_index` — Vector search on `embedding` field (1536 dimensions, cosine similarity)
+   - `memories_fts_index` — Full-text search on `content` and `summary` fields
+   - `cache_vector_index` — Vector search on cache embeddings
+
+If Atlas Search index creation fails (e.g., on a non-Atlas deployment), the server continues running. The `hybrid_search` tool and vector-based `recall_memory` require these indexes to function.
+
+## Production Considerations
+
+### Memory
+
+The default Docker memory limit is 2 GB. Adjust in `docker-compose.yml` under `deploy.resources.limits.memory` if the enrichment worker processes large batches.
+
+### Enrichment Worker Tuning
+
+The background enrichment worker runs within the server process. For high-volume workloads, tune these variables:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ENRICHMENT_INTERVAL_SECONDS` | `30` | Polling frequency |
+| `ENRICHMENT_BATCH_SIZE` | `50` | Memories per poll cycle |
+| `ENRICHMENT_CONCURRENCY` | `5` | Parallel enrichment tasks |
+
+Higher concurrency increases AWS Bedrock API usage.
+
+### Audit Flush Strategy
+
+For compliance-sensitive deployments, set `AUDIT_FLUSH_ON_WRITE=true` to flush every audit entry immediately. This increases MongoDB write load but guarantees no audit entries are lost on crash.
+
+Default buffered mode flushes every 10 entries or 60 seconds (whichever comes first). If MongoDB is unreachable during flush, entries are written to `audit_fallback.jsonl` in the working directory.
+
+### Connection Pool
+
+MongoDB connection pool defaults:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MONGODB_MIN_POOL_SIZE` | `2` | Minimum idle connections |
+| `MONGODB_MAX_POOL_SIZE` | `20` | Maximum concurrent connections |
+
+Increase `MONGODB_MAX_POOL_SIZE` if the server handles many concurrent MCP clients.
+
+### Cache TTL
+
+Cache entries expire after `CACHE_TTL_SECONDS` (default: 3600, i.e. 1 hour). Increase for workloads with stable, infrequently changing responses. Decrease if cached answers go stale quickly.
+
+## Rollback
+
+To stop and remove the container:
+
+```bash
+docker compose down
+```
+
+Data persists in MongoDB Atlas. No Docker volumes are used for application state.
