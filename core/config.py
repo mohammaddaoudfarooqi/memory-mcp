@@ -115,8 +115,17 @@ class MCPConfig(BaseSettings):
     rate_limit_max_requests: int = 100
 
     # Prompt Library (Phase 2)
-    prompt_experiment_enabled: bool = False
+    prompt_experiment_enabled: bool = True
     prompt_cache_ttl_seconds: int = 300
+
+    # Auto-Capture (Phase 2)
+    auto_capture_enabled: bool = True
+    auto_capture_tools: list[str] = [
+        "recall_memory", "hybrid_search", "search_web",
+        "store_decision", "recall_decision",
+    ]
+    auto_capture_min_length: int = 30
+    auto_capture_max_content_length: int = 2000
 
     # Decision Stickiness (Phase 2)
     decision_stickiness_enabled: bool = False

@@ -199,7 +199,9 @@ RATE_LIMIT_MAX_REQUESTS=100
 RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
-Governance assigns role-based policies (admin, power_user, end_user) and rate limiting enforces per-user request quotas. Both are checked via `check_access` before every tool invocation.
+When `GOVERNANCE_ENABLED=true`, three default governance profiles (admin, power_user, end_user) are seeded to the database at startup. Each profile defines allowed operations and per-role request limits (`max_searches_per_day`, `max_memories_per_day`).
+
+Rate limiting is governance-aware: when a governance profile exists for the user's role, the per-role limits from the profile override the global `RATE_LIMIT_MAX_REQUESTS` default. Both governance and rate limiting are checked via `check_access` before every tool invocation.
 
 See [configuration.md](configuration.md) for the full list of auth, governance, and rate limiting variables.
 
@@ -223,9 +225,11 @@ Higher concurrency increases AWS Bedrock API usage.
 
 ### Audit Flush Strategy
 
+A periodic background worker (`AuditFlushWorker`) flushes buffered audit entries every `AUDIT_FLUSH_INTERVAL_SECONDS` (default: 60). This runs alongside the buffer-full trigger (every 10 entries), reducing the window of unflushed entries on crash.
+
 For compliance-sensitive deployments, set `AUDIT_FLUSH_ON_WRITE=true` to flush every audit entry immediately. This increases MongoDB write load but guarantees no audit entries are lost on crash.
 
-Default buffered mode flushes every 10 entries or 60 seconds (whichever comes first). If MongoDB is unreachable during flush, entries are written to `audit_fallback.jsonl` in the working directory.
+If MongoDB is unreachable during flush, entries are written to `audit_fallback.jsonl` in the working directory.
 
 ### Connection Pool
 
@@ -241,6 +245,30 @@ Increase `MONGODB_MAX_POOL_SIZE` if the server handles many concurrent MCP clien
 ### Cache TTL
 
 Cache entries expire after `CACHE_TTL_SECONDS` (default: 3600, i.e. 1 hour). Increase for workloads with stable, infrequently changing responses. Decrease if cached answers go stale quickly.
+
+### Startup Seeding
+
+On startup, the server seeds essential data to the database (Stage 1b, after index creation):
+
+| Data | Collection | Condition | Count |
+|------|-----------|-----------|-------|
+| Governance profiles (admin, power_user, end_user) | `governance_profiles` | `GOVERNANCE_ENABLED=true` | 3 |
+| Prompt templates (importance_assessment, summary_generation, merge_prompt) | `prompts` | Always | 3 |
+| System decisions (system:governance_profile, system:prompt_experiment) | `decisions` | Always | 2 |
+
+Seeding is idempotent — existing records are not overwritten. Failures are logged but non-fatal; the server continues startup.
+
+### Auto-Capture
+
+Auto-capture is enabled by default (`AUTO_CAPTURE_ENABLED=true`). It wraps configured MCP tools with middleware that stores tool interactions as STM memories. This ensures the memory store is populated through normal usage even when the LLM does not call `store_memory`.
+
+To disable auto-capture:
+
+```bash
+AUTO_CAPTURE_ENABLED=false
+```
+
+See [configuration.md](configuration.md) for `AUTO_CAPTURE_TOOLS`, `AUTO_CAPTURE_MIN_LENGTH`, and `AUTO_CAPTURE_MAX_CONTENT_LENGTH`.
 
 ## Rollback
 

@@ -147,3 +147,79 @@ class TestSavePrompt:
         col.find_one = AsyncMock(return_value={"version": 1})
         await lib.save_prompt("test", "new template")
         assert "test:latest" not in lib._cache
+
+
+class TestSeedDefaults:
+    """seed_defaults inserts hardcoded prompts as version 1."""
+
+    async def test_seed_inserts_all(self):
+        """TC-E-004: All hardcoded prompts inserted on empty collection."""
+        col = _make_collection()
+        config = _make_config()
+        lib = PromptLibrary(col, config)
+
+        col.find_one = AsyncMock(return_value=None)
+
+        count = await lib.seed_defaults()
+
+        assert count == len(_HARDCODED_PROMPTS)
+        assert col.insert_one.call_count == len(_HARDCODED_PROMPTS)
+
+        # Verify inserted docs have version 1
+        for call in col.insert_one.call_args_list:
+            doc = call[0][0]
+            assert doc["version"] == 1
+            assert "name" in doc
+            assert "template" in doc
+            assert "created_at" in doc
+            assert "updated_at" in doc
+
+    async def test_seed_skips_existing(self):
+        """TC-E-005: Existing prompts are not overwritten."""
+        col = _make_collection()
+        config = _make_config()
+        lib = PromptLibrary(col, config)
+
+        col.find_one = AsyncMock(return_value={"name": "existing", "version": 1})
+
+        count = await lib.seed_defaults()
+
+        assert count == 0
+        col.insert_one.assert_not_called()
+
+    async def test_seed_returns_count(self):
+        """TC-E-006: Returns count of inserted prompts."""
+        col = _make_collection()
+        config = _make_config()
+        lib = PromptLibrary(col, config)
+
+        # First prompt exists, others don't
+        call_count = 0
+        async def find_one_side_effect(query, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"name": "exists", "version": 1}
+            return None
+
+        col.find_one = AsyncMock(side_effect=find_one_side_effect)
+
+        count = await lib.seed_defaults()
+
+        assert count == len(_HARDCODED_PROMPTS) - 1
+
+    async def test_seed_skips_higher_version(self):
+        """TC-E-034: Seed does not overwrite if higher version exists."""
+        col = _make_collection()
+        config = _make_config()
+        lib = PromptLibrary(col, config)
+
+        # A version 5 already exists
+        col.find_one = AsyncMock(return_value={
+            "name": "importance_assessment", "version": 5, "template": "custom",
+        })
+
+        count = await lib.seed_defaults()
+
+        assert count == 0
+        col.insert_one.assert_not_called()

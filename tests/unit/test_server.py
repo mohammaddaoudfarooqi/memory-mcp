@@ -70,13 +70,16 @@ class TestLifespan:
 
             mock_enrichment_task = MagicMock()
             mock_consolidation_task = MagicMock()
+            mock_audit_flush_task = MagicMock()
             mock_search_task = MagicMock()
             mock_search_task.done = MagicMock(return_value=False)
             mock_asyncio.create_task.side_effect = [
-                mock_enrichment_task, mock_consolidation_task, mock_search_task,
+                mock_enrichment_task, mock_consolidation_task,
+                mock_audit_flush_task, mock_search_task,
             ]
             mock_enrichment_task.cancel = MagicMock()
             mock_consolidation_task.cancel = MagicMock()
+            mock_audit_flush_task.cancel = MagicMock()
 
             from memory_mcp.server import lifespan
 
@@ -92,13 +95,14 @@ class TestLifespan:
             mock_cache_cls.assert_called_once()
             mock_audit_cls.assert_called_once()
             mock_reg_cls.initialize.assert_called_once()
-            assert mock_asyncio.create_task.call_count == 3
+            assert mock_asyncio.create_task.call_count == 4
 
             # Shutdown
             await ctx.__aexit__(None, None, None)
 
             mock_enrichment_task.cancel.assert_called_once()
             mock_consolidation_task.cancel.assert_called_once()
+            mock_audit_flush_task.cancel.assert_called_once()
             mock_search_task.cancel.assert_called_once()
             mock_audit_cls.return_value.flush.assert_called_once()
             mock_db_manager.close.assert_called_once()
@@ -118,6 +122,7 @@ class TestLifespan:
              patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
              patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
              patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
              patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
              patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
              patch("memory_mcp.server.asyncio") as mock_asyncio:
@@ -130,13 +135,19 @@ class TestLifespan:
             mock_enrichment.run = AsyncMock()
             mock_enrich_cls.return_value = mock_enrichment
             mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_pl_cls.return_value = MagicMock(seed_defaults=AsyncMock(return_value=0))
+            mock_ds_cls.return_value = MagicMock(seed_defaults=AsyncMock(return_value=0))
 
             mock_reg_instance = MagicMock()
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
             mock_reg_cls.initialize.return_value = mock_reg_instance
 
             mock_search_task = MagicMock()
             mock_search_task.done = MagicMock(return_value=True)
-            mock_asyncio.create_task.side_effect = [MagicMock(), MagicMock(), mock_search_task]
+            mock_asyncio.create_task.side_effect = [MagicMock(), MagicMock(), MagicMock(), mock_search_task]
 
             from memory_mcp.server import lifespan
 
@@ -185,25 +196,31 @@ class TestEnrichmentWorkerLifecycle:
              patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
              patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
              patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
              patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
              patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
              patch("memory_mcp.server.asyncio") as mock_asyncio:
 
             mock_db_cls.initialize = AsyncMock(return_value=mock_db_manager)
-            mock_audit_cls.return_value = MagicMock()
-            mock_audit_cls.return_value.flush = AsyncMock()
+            mock_audit_cls.return_value = MagicMock(flush=AsyncMock())
 
             mock_enrichment = MagicMock()
             mock_enrichment.run = AsyncMock()
             mock_enrich_cls.return_value = mock_enrichment
             mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_pl_cls.return_value = MagicMock(seed_defaults=AsyncMock(return_value=0))
+            mock_ds_cls.return_value = MagicMock(seed_defaults=AsyncMock(return_value=0))
 
             mock_reg_instance = MagicMock()
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
             mock_reg_cls.initialize.return_value = mock_reg_instance
 
             mock_search_task = MagicMock()
             mock_search_task.done = MagicMock(return_value=True)
-            mock_asyncio.create_task.side_effect = [MagicMock(), MagicMock(), mock_search_task]
+            mock_asyncio.create_task.side_effect = [MagicMock(), MagicMock(), MagicMock(), mock_search_task]
 
             from memory_mcp.server import lifespan
 
@@ -267,6 +284,283 @@ class TestHealthEndpoint:
         import json
         body = json.loads(response.body)
         assert body["status"] == "ok"
+
+
+class TestLifespanSeeding:
+    """TC-E-001–013: Lifespan seeds governance, prompts, decisions at startup."""
+
+    async def test_lifespan_seeds_governance_when_enabled(self):
+        """TC-E-001: governance seed called when governance_enabled=True."""
+        mock_db_manager, collections = _make_mock_db_manager()
+        mock_config = _make_config(governance_enabled=True)
+
+        with patch("memory_mcp.server.MCPConfig", return_value=mock_config), \
+             patch("memory_mcp.server.DatabaseManager") as mock_db_cls, \
+             patch("memory_mcp.server.ProviderManager"), \
+             patch("memory_mcp.server.MemoryService"), \
+             patch("memory_mcp.server.CacheService"), \
+             patch("memory_mcp.server.AuditService") as mock_audit_cls, \
+             patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.GovernanceService") as mock_gov_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
+             patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
+             patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
+             patch("memory_mcp.server.asyncio") as mock_asyncio:
+
+            mock_db_cls.initialize = AsyncMock(return_value=mock_db_manager)
+            mock_audit_cls.return_value = MagicMock(flush=AsyncMock())
+            mock_enrich_cls.return_value = MagicMock(run=AsyncMock())
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_gov_instance = MagicMock()
+            mock_gov_instance.seed_defaults = AsyncMock(return_value=3)
+            mock_gov_cls.return_value = mock_gov_instance
+
+            mock_pl_instance = MagicMock()
+            mock_pl_instance.seed_defaults = AsyncMock(return_value=3)
+            mock_pl_cls.return_value = mock_pl_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.seed_defaults = AsyncMock(return_value=2)
+            mock_ds_cls.return_value = mock_ds_instance
+
+            mock_reg_instance = MagicMock()
+            mock_reg_instance.governance_service = None
+            mock_reg_instance.rate_limiter = None
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
+            mock_search_task = MagicMock(done=MagicMock(return_value=True))
+            mock_asyncio.create_task.side_effect = [
+                MagicMock(), MagicMock(), MagicMock(), mock_search_task,
+            ]
+
+            from memory_mcp.server import lifespan
+            app = MagicMock()
+            ctx = lifespan(app)
+            await ctx.__aenter__()
+            await ctx.__aexit__(None, None, None)
+
+            mock_gov_instance.seed_defaults.assert_called_once()
+
+    async def test_lifespan_skips_governance_seed_when_disabled(self):
+        """TC-E-002: governance seed NOT called when governance_enabled=False."""
+        mock_db_manager, collections = _make_mock_db_manager()
+        mock_config = _make_config(governance_enabled=False)
+
+        with patch("memory_mcp.server.MCPConfig", return_value=mock_config), \
+             patch("memory_mcp.server.DatabaseManager") as mock_db_cls, \
+             patch("memory_mcp.server.ProviderManager"), \
+             patch("memory_mcp.server.MemoryService"), \
+             patch("memory_mcp.server.CacheService"), \
+             patch("memory_mcp.server.AuditService") as mock_audit_cls, \
+             patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
+             patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
+             patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
+             patch("memory_mcp.server.asyncio") as mock_asyncio:
+
+            mock_db_cls.initialize = AsyncMock(return_value=mock_db_manager)
+            mock_audit_cls.return_value = MagicMock(flush=AsyncMock())
+            mock_enrich_cls.return_value = MagicMock(run=AsyncMock())
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_pl_instance = MagicMock()
+            mock_pl_instance.seed_defaults = AsyncMock(return_value=3)
+            mock_pl_cls.return_value = mock_pl_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.seed_defaults = AsyncMock(return_value=2)
+            mock_ds_cls.return_value = mock_ds_instance
+
+            mock_reg_instance = MagicMock()
+            mock_reg_instance.governance_service = None
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
+            mock_search_task = MagicMock(done=MagicMock(return_value=True))
+            mock_asyncio.create_task.side_effect = [
+                MagicMock(), MagicMock(), MagicMock(), mock_search_task,
+            ]
+
+            from memory_mcp.server import lifespan
+            app = MagicMock()
+            ctx = lifespan(app)
+            await ctx.__aenter__()
+            await ctx.__aexit__(None, None, None)
+
+            # GovernanceService should not even be created
+            # (it's conditionally created only when governance_enabled=True)
+
+    async def test_lifespan_seeds_prompts(self):
+        """TC-E-007: prompt_library.seed_defaults() called at startup."""
+        mock_db_manager, collections = _make_mock_db_manager()
+        mock_config = _make_config()
+
+        with patch("memory_mcp.server.MCPConfig", return_value=mock_config), \
+             patch("memory_mcp.server.DatabaseManager") as mock_db_cls, \
+             patch("memory_mcp.server.ProviderManager"), \
+             patch("memory_mcp.server.MemoryService"), \
+             patch("memory_mcp.server.CacheService"), \
+             patch("memory_mcp.server.AuditService") as mock_audit_cls, \
+             patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
+             patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
+             patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
+             patch("memory_mcp.server.asyncio") as mock_asyncio:
+
+            mock_db_cls.initialize = AsyncMock(return_value=mock_db_manager)
+            mock_audit_cls.return_value = MagicMock(flush=AsyncMock())
+            mock_enrich_cls.return_value = MagicMock(run=AsyncMock())
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_pl_instance = MagicMock()
+            mock_pl_instance.seed_defaults = AsyncMock(return_value=3)
+            mock_pl_cls.return_value = mock_pl_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.seed_defaults = AsyncMock(return_value=2)
+            mock_ds_cls.return_value = mock_ds_instance
+
+            mock_reg_instance = MagicMock()
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
+            mock_search_task = MagicMock(done=MagicMock(return_value=True))
+            mock_asyncio.create_task.side_effect = [
+                MagicMock(), MagicMock(), MagicMock(), mock_search_task,
+            ]
+
+            from memory_mcp.server import lifespan
+            app = MagicMock()
+            ctx = lifespan(app)
+            await ctx.__aenter__()
+            await ctx.__aexit__(None, None, None)
+
+            mock_pl_instance.seed_defaults.assert_called_once()
+
+    async def test_lifespan_seeds_decisions(self):
+        """TC-E-011: decision_service.seed_defaults() called at startup."""
+        mock_db_manager, collections = _make_mock_db_manager()
+        mock_config = _make_config()
+
+        with patch("memory_mcp.server.MCPConfig", return_value=mock_config), \
+             patch("memory_mcp.server.DatabaseManager") as mock_db_cls, \
+             patch("memory_mcp.server.ProviderManager"), \
+             patch("memory_mcp.server.MemoryService"), \
+             patch("memory_mcp.server.CacheService"), \
+             patch("memory_mcp.server.AuditService") as mock_audit_cls, \
+             patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
+             patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
+             patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
+             patch("memory_mcp.server.asyncio") as mock_asyncio:
+
+            mock_db_cls.initialize = AsyncMock(return_value=mock_db_manager)
+            mock_audit_cls.return_value = MagicMock(flush=AsyncMock())
+            mock_enrich_cls.return_value = MagicMock(run=AsyncMock())
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            mock_pl_instance = MagicMock()
+            mock_pl_instance.seed_defaults = AsyncMock(return_value=3)
+            mock_pl_cls.return_value = mock_pl_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.seed_defaults = AsyncMock(return_value=2)
+            mock_ds_cls.return_value = mock_ds_instance
+
+            mock_reg_instance = MagicMock()
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
+            mock_search_task = MagicMock(done=MagicMock(return_value=True))
+            mock_asyncio.create_task.side_effect = [
+                MagicMock(), MagicMock(), MagicMock(), mock_search_task,
+            ]
+
+            from memory_mcp.server import lifespan
+            app = MagicMock()
+            ctx = lifespan(app)
+            await ctx.__aenter__()
+            await ctx.__aexit__(None, None, None)
+
+            mock_ds_instance.seed_defaults.assert_called_once()
+
+    async def test_lifespan_seed_failure_continues_startup(self):
+        """TC-E-012: Seed failure logged but startup continues."""
+        mock_db_manager, collections = _make_mock_db_manager()
+        mock_config = _make_config()
+
+        with patch("memory_mcp.server.MCPConfig", return_value=mock_config), \
+             patch("memory_mcp.server.DatabaseManager") as mock_db_cls, \
+             patch("memory_mcp.server.ProviderManager"), \
+             patch("memory_mcp.server.MemoryService"), \
+             patch("memory_mcp.server.CacheService"), \
+             patch("memory_mcp.server.AuditService") as mock_audit_cls, \
+             patch("memory_mcp.server.EnrichmentWorker") as mock_enrich_cls, \
+             patch("memory_mcp.server.ConsolidationWorker") as mock_consol_cls, \
+             patch("memory_mcp.server.PromptLibrary") as mock_pl_cls, \
+             patch("memory_mcp.server.DecisionService") as mock_ds_cls, \
+             patch("memory_mcp.server.AuditFlushWorker") as mock_afw_cls, \
+             patch("memory_mcp.server.ServiceRegistry") as mock_reg_cls, \
+             patch("memory_mcp.server.ensure_indexes", new_callable=AsyncMock), \
+             patch("memory_mcp.server.asyncio") as mock_asyncio:
+
+            mock_db_cls.initialize = AsyncMock(return_value=mock_db_manager)
+            mock_audit_cls.return_value = MagicMock(flush=AsyncMock())
+            mock_enrich_cls.return_value = MagicMock(run=AsyncMock())
+            mock_consol_cls.return_value = MagicMock(run=AsyncMock())
+            mock_afw_cls.return_value = MagicMock(run=AsyncMock())
+
+            # Prompt seed raises
+            mock_pl_instance = MagicMock()
+            mock_pl_instance.seed_defaults = AsyncMock(side_effect=Exception("DB error"))
+            mock_pl_cls.return_value = mock_pl_instance
+
+            mock_ds_instance = MagicMock()
+            mock_ds_instance.seed_defaults = AsyncMock(return_value=2)
+            mock_ds_cls.return_value = mock_ds_instance
+
+            mock_reg_instance = MagicMock()
+            mock_reg_instance.prompt_library = None
+            mock_reg_instance.decision_service = None
+            mock_reg_cls.initialize.return_value = mock_reg_instance
+
+            mock_search_task = MagicMock(done=MagicMock(return_value=True))
+            mock_asyncio.create_task.side_effect = [
+                MagicMock(), MagicMock(), MagicMock(), mock_search_task,
+            ]
+
+            from memory_mcp.server import lifespan
+            app = MagicMock()
+            ctx = lifespan(app)
+
+            # Should NOT raise despite seed failure
+            await ctx.__aenter__()
+            await ctx.__aexit__(None, None, None)
+
+            # Decision seed should still have been called
+            mock_ds_instance.seed_defaults.assert_called_once()
 
 
 class TestMainEntryPoint:

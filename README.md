@@ -90,9 +90,12 @@ Add one of the following to your MCP client's `mcp.json` (see `mcp.json.example`
 - **Background enrichment**: Async worker that assesses memory importance and generates summaries via LLM
 - **Memory consolidation**: Background worker for STM compression, low-importance forgetting, and STM-to-LTM promotion
 - **Memory evolution**: Automatic reinforcement of similar memories and merge detection
+- **Auto-capture**: Transparent middleware that automatically stores tool interactions as STM memories, ensuring the memory store is populated even when the LLM does not call `store_memory`
 - **Calibrated ranking**: Three-component scoring combining recency, importance, and relevance
+- **Startup seeding**: Governance profiles, prompt templates, and system decisions are seeded to the database at startup — no LLM intervention required for the system to be fully functional
 - **Authentication**: API key and HS256 JWT authentication with optional governance and rate limiting
-- **Audit logging**: Buffered audit trail for all operations with configurable flush strategies
+- **Governance-aware rate limiting**: Per-role request quotas derived from governance profiles (admin, power_user, end_user), with automatic fallback to global defaults
+- **Audit logging**: Buffered audit trail for all operations with periodic background flush and configurable flush strategies
 - **Admin tools**: Memory health monitoring, user data wiping, and cache invalidation
 - **Web search**: Optional Tavily API integration for web search
 - **Multi-tenant isolation**: All queries scoped by `user_id`
@@ -125,14 +128,18 @@ Memory-MCP runs as a single FastMCP process with the following internal services
 - **MemoryService** — STM/LTM storage, recall with calibrated ranking, soft-delete
 - **CacheService** — Semantic cache with vector similarity lookup
 - **AuditService** — Buffered audit logging with MongoDB persistence and local file fallback
+- **AuditFlushWorker** — Periodic background task that flushes audit entries, preventing data loss on crash
 - **EnrichmentWorker** — Background async task for LTM importance assessment, summarization, and memory evolution
 - **ConsolidationWorker** — Background task for STM compression, forgetting, and STM-to-LTM promotion
-- **DecisionService** — Keyed key-value store for sticky decisions with optional TTL
-- **GovernanceService** — Role-based access policies (optional, via `GOVERNANCE_ENABLED`)
-- **RateLimiter** — Per-user sliding-window rate limiting (optional, via `RATE_LIMIT_ENABLED`)
-- **PromptLibrary** — Versioned prompt templates for enrichment prompts
+- **AutoCaptureMiddleware** — Wraps MCP tools to automatically store interactions as STM memories
+- **DecisionService** — Keyed key-value store for sticky decisions with optional TTL; seeds system defaults at startup
+- **GovernanceService** — Role-based access policies (optional, via `GOVERNANCE_ENABLED`); seeds default profiles at startup
+- **RateLimiter** — Per-user sliding-window rate limiting with governance-aware per-role limits (optional, via `RATE_LIMIT_ENABLED`)
+- **PromptLibrary** — Versioned prompt templates for enrichment prompts; seeds default templates at startup
 
 Embedding and LLM operations are handled by pluggable providers (AWS Bedrock, Voyage AI). MongoDB Atlas provides vector search, full-text search, and TTL-based document expiration. Authentication supports static API keys and HS256 JWTs (optional, via `AUTH_ENABLED`).
+
+At startup, the server seeds governance profiles, prompt templates, and system decisions to the database (idempotent, best-effort). This ensures the system is fully functional without requiring the LLM to call any setup tools.
 
 See [docs/architecture.md](docs/architecture.md) for data flow diagrams and design decisions.
 

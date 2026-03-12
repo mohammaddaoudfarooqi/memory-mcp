@@ -172,12 +172,26 @@ The ranking formula: `score = α·recency + β·importance_boost + γ·relevance
 | `RATE_LIMIT_WINDOW_SECONDS` | integer | No | `60` | Rate limit window duration |
 | `RATE_LIMIT_MAX_REQUESTS` | integer | No | `100` | Maximum requests per window per user |
 
-### Experimental (Phase 2)
+### Prompt Library (Phase 2)
 
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `PROMPT_EXPERIMENT_ENABLED` | boolean | No | `false` | Enable prompt library experimentation |
+| `PROMPT_EXPERIMENT_ENABLED` | boolean | No | `true` | Enable DB-first prompt templates for enrichment. When `true`, the server reads prompt templates from the `prompts` collection (seeded at startup). When `false`, hardcoded defaults are used directly. |
 | `PROMPT_CACHE_TTL_SECONDS` | integer | No | `300` | TTL for prompt template cache |
+
+### Auto-Capture (Phase 2)
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `AUTO_CAPTURE_ENABLED` | boolean | No | `true` | Enable automatic memory capture of tool interactions. When enabled, configured tools are wrapped with middleware that stores interactions as STM memories. |
+| `AUTO_CAPTURE_TOOLS` | list[string] | No | `["recall_memory", "hybrid_search", "search_web", "store_decision", "recall_decision"]` | Tools to auto-capture. Tools in the exclusion list (`store_memory`, `wipe_user_data`, `delete_memory`, `cache_invalidate`) are always skipped. |
+| `AUTO_CAPTURE_MIN_LENGTH` | integer | No | `30` | Minimum content length for auto-capture. Interactions producing shorter content are skipped. |
+| `AUTO_CAPTURE_MAX_CONTENT_LENGTH` | integer | No | `2000` | Maximum content length stored per auto-captured memory. Content exceeding this is truncated. |
+
+### Decision Stickiness (Phase 2)
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
 | `DECISION_STICKINESS_ENABLED` | boolean | No | `false` | Enable decision stickiness |
 | `DECISION_DEFAULT_TTL_DAYS` | integer | No | `90` | Default TTL for sticky decisions |
 
@@ -198,4 +212,13 @@ AWS_REGION=us-east-1
 
 # Optional: enable web search
 # TAVILY_API_KEY=your-tavily-api-key
+
+# Optional: enable auth, governance, and rate limiting
+# AUTH_ENABLED=true
+# AUTH_SECRET=your-secret-key-at-least-32-characters-long
+# GOVERNANCE_ENABLED=true
+# RATE_LIMIT_ENABLED=true
+
+# Auto-capture is enabled by default. To disable:
+# AUTO_CAPTURE_ENABLED=false
 ```

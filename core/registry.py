@@ -54,17 +54,33 @@ class ServiceRegistry:
             raise RuntimeError("ServiceRegistry not initialized.")
         return cls._instance
 
+    # Operations classified as "search" for governance limit mapping
+    _SEARCH_OPERATIONS = frozenset({
+        "recall_memory", "hybrid_search", "search_web", "check_cache",
+    })
+
     async def check_access(self, user_id: str, operation: str, role: str | None = None) -> str | None:
         """Check governance and rate limits. Returns error string or None if OK."""
         effective_role = role or (self.config.auth_default_role if self.config else "end_user")
 
+        profile = None
         if self.governance_service is not None:
             allowed = await self.governance_service.check_allowed(user_id, effective_role, operation)
             if not allowed:
                 return f"Operation '{operation}' not allowed for role '{effective_role}'"
+            profile = await self.governance_service.get_profile(effective_role)
 
         if self.rate_limiter is not None:
-            within_limit = await self.rate_limiter.check_rate_limit(user_id, operation)
+            if profile is not None:
+                if operation in self._SEARCH_OPERATIONS:
+                    max_requests = profile.get("max_searches_per_day")
+                else:
+                    max_requests = profile.get("max_memories_per_day")
+                within_limit = await self.rate_limiter.check_rate_limit(
+                    user_id, operation, max_requests=max_requests,
+                )
+            else:
+                within_limit = await self.rate_limiter.check_rate_limit(user_id, operation)
             if not within_limit:
                 return f"Rate limit exceeded for '{operation}'"
 

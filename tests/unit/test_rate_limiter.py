@@ -114,3 +114,44 @@ class TestRateLimiterBoundary:
 
         result = await limiter.check_rate_limit("user1", "store_memory")
         assert result is True
+
+
+class TestRateLimiterGovernanceOverride:
+    """TC-E-028: Rate limiter reads limits from governance profile."""
+
+    async def test_governance_override_allows(self):
+        """TC-E-028: When max_requests override is provided, uses that instead of config."""
+        col = _make_collection()
+        config = _make_config(rate_limit_enabled=True, rate_limit_max_requests=10)
+        limiter = RateLimiter(col, config)
+
+        # 50 requests in window — would exceed config default of 10,
+        # but governance override allows 100
+        col.count_documents = AsyncMock(return_value=50)
+
+        result = await limiter.check_rate_limit("user1", "store_memory", max_requests=100)
+        assert result is True
+
+    async def test_governance_override_blocks(self):
+        """TC-E-028: Governance override can be more restrictive than config."""
+        col = _make_collection()
+        config = _make_config(rate_limit_enabled=True, rate_limit_max_requests=100)
+        limiter = RateLimiter(col, config)
+
+        # 50 requests — within config default of 100,
+        # but governance override limits to 20
+        col.count_documents = AsyncMock(return_value=50)
+
+        result = await limiter.check_rate_limit("user1", "store_memory", max_requests=20)
+        assert result is False
+
+    async def test_no_override_uses_config_default(self):
+        """TC-E-028: Without override, uses config.rate_limit_max_requests."""
+        col = _make_collection()
+        config = _make_config(rate_limit_enabled=True, rate_limit_max_requests=100)
+        limiter = RateLimiter(col, config)
+
+        col.count_documents = AsyncMock(return_value=50)
+
+        result = await limiter.check_rate_limit("user1", "store_memory")
+        assert result is True

@@ -163,3 +163,31 @@ class TestMCPConfigValidation:
     def test_tavily_key_optional(self):
         config = _make_config()
         assert config.tavily_api_key is None
+
+
+class TestMCPConfigAutoCapture:
+    """TC-E: Auto-capture config defaults and overrides."""
+
+    def test_auto_capture_defaults(self):
+        config = _make_config()
+        assert config.auto_capture_enabled is True
+        assert "recall_memory" in config.auto_capture_tools
+        assert "hybrid_search" in config.auto_capture_tools
+        assert "search_web" in config.auto_capture_tools
+        assert "store_decision" in config.auto_capture_tools
+        assert "recall_decision" in config.auto_capture_tools
+        assert config.auto_capture_min_length == 30
+        assert config.auto_capture_max_content_length == 2000
+
+    def test_auto_capture_disabled(self):
+        config = _make_config(auto_capture_enabled=False)
+        assert config.auto_capture_enabled is False
+
+    def test_auto_capture_custom_tools(self):
+        config = _make_config(auto_capture_tools=["recall_memory"])
+        assert config.auto_capture_tools == ["recall_memory"]
+
+    def test_prompt_experiment_enabled_default_true(self):
+        """REQ-E-024: prompt_experiment_enabled default changed to true."""
+        config = _make_config()
+        assert config.prompt_experiment_enabled is True

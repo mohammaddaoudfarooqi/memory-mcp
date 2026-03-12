@@ -18,14 +18,19 @@ class RateLimiter:
         self.collection = rate_limits_collection
         self.config = config
 
-    async def check_rate_limit(self, user_id: str, operation: str) -> bool:
+    async def check_rate_limit(
+        self, user_id: str, operation: str, max_requests: int | None = None,
+    ) -> bool:
         """Return True if within rate limit, False if exceeded.
 
-        Records the operation attempt and checks against the configured
-        rate limit window.
+        Records the operation attempt and checks against the rate limit window.
+        When ``max_requests`` is provided (e.g. from a governance profile),
+        it overrides the global ``config.rate_limit_max_requests``.
         """
         if not self.config.rate_limit_enabled:
             return True
+
+        effective_max = max_requests if max_requests is not None else self.config.rate_limit_max_requests
 
         now = datetime.now(timezone.utc)
         window_start = now - timedelta(seconds=self.config.rate_limit_window_seconds)
@@ -37,7 +42,7 @@ class RateLimiter:
             "timestamp": {"$gte": window_start},
         })
 
-        if count >= self.config.rate_limit_max_requests:
+        if count >= effective_max:
             logger.warning(
                 "Rate limit exceeded for user %s on %s: %d/%d",
                 user_id, operation, count, self.config.rate_limit_max_requests,

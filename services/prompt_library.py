@@ -102,3 +102,24 @@ class PromptLibrary:
                 self._cache_time.pop(key, None)
 
         return str(result.inserted_id)
+
+    async def seed_defaults(self) -> int:
+        """Seed hardcoded prompts into DB as version 1. Returns count inserted.
+
+        Idempotent: skips prompts that already have any version in the DB.
+        """
+        count = 0
+        for name, template in _HARDCODED_PROMPTS.items():
+            existing = await self.collection.find_one({"name": name})
+            if not existing:
+                now = datetime.now(timezone.utc)
+                doc = {
+                    "name": name,
+                    "template": template,
+                    "version": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                await self.collection.insert_one(doc)
+                count += 1
+        return count

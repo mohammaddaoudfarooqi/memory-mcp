@@ -14,6 +14,8 @@ from memory_mcp.core.migrations import ensure_indexes, ensure_search_indexes
 from memory_mcp.core.registry import ServiceRegistry
 from memory_mcp.providers.manager import ProviderManager
 from memory_mcp.services.audit import AuditService
+from memory_mcp.services.audit_flush_worker import AuditFlushWorker
+from memory_mcp.services.auto_capture import AutoCaptureMiddleware, wrap_tools
 from memory_mcp.services.cache import CacheService
 from memory_mcp.services.consolidation import ConsolidationWorker
 from memory_mcp.services.decision import DecisionService
@@ -86,12 +88,35 @@ async def lifespan(app: FastMCP):
             db_manager.db["rate_limits"], config,
         )
 
-    registry.prompt_library = PromptLibrary(
+    prompt_library = PromptLibrary(
         db_manager.db["prompts"], config,
     )
-    registry.decision_service = DecisionService(
+    registry.prompt_library = prompt_library
+
+    decision_service = DecisionService(
         db_manager.db["decisions"], config,
     )
+    registry.decision_service = decision_service
+
+    # Stage 1b: Seed essential data (best-effort, non-fatal)
+    if config.governance_enabled and registry.governance_service is not None:
+        try:
+            count = await registry.governance_service.seed_defaults()
+            logger.info("Governance profiles seeded: %d new.", count)
+        except Exception:
+            logger.warning("Governance seed failed (non-fatal).", exc_info=True)
+
+    try:
+        count = await prompt_library.seed_defaults()
+        logger.info("Prompt templates seeded: %d new.", count)
+    except Exception:
+        logger.warning("Prompt seed failed (non-fatal).", exc_info=True)
+
+    try:
+        count = await decision_service.seed_defaults()
+        logger.info("System decisions seeded: %d new.", count)
+    except Exception:
+        logger.warning("Decision seed failed (non-fatal).", exc_info=True)
 
     # Start enrichment background task
     enrichment_worker = EnrichmentWorker(
@@ -106,10 +131,20 @@ async def lifespan(app: FastMCP):
     )
     consolidation_task = asyncio.create_task(consolidation_worker.run())
 
+    # Start audit flush background task
+    audit_flush_worker = AuditFlushWorker(audit_service, config)
+    audit_flush_task = asyncio.create_task(audit_flush_worker.run())
+
     # Stage 2: Atlas Search indexes (background, non-blocking)
     search_index_task = asyncio.create_task(
         _ensure_search_indexes_bg(db_manager.db, config.embedding_dimension)
     )
+
+    # Auto-capture: wrap registered tools with memory capture
+    if config.auto_capture_enabled:
+        auto_capture = AutoCaptureMiddleware(memory_service, config)
+        wrap_tools(mcp, auto_capture)
+        logger.info("Auto-capture enabled for %d tool(s).", len(config.auto_capture_tools))
 
     logger.info("Memory-MCP v%s started", config.app_version)
 
@@ -118,6 +153,7 @@ async def lifespan(app: FastMCP):
     # Shutdown
     enrichment_task.cancel()
     consolidation_task.cancel()
+    audit_flush_task.cancel()
     if not search_index_task.done():
         search_index_task.cancel()
     await audit_service.flush()

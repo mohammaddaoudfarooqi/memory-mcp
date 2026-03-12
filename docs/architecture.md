@@ -23,7 +23,7 @@ The server targets AI agents and LLM-based applications that need to remember pa
 
 | Container | Technology | Responsibility |
 |-----------|-----------|----------------|
-| Memory-MCP Server | Python 3.11, FastMCP | Hosts MCP tools, manages service lifecycle, runs enrichment worker |
+| Memory-MCP Server | Python 3.11, FastMCP | Hosts MCP tools, manages service lifecycle, runs background workers |
 | MongoDB Atlas | MongoDB 7.0+ | Persists memories, cache, and audit logs; provides search indexes |
 | AWS Bedrock | Amazon Titan, Claude | Generates embeddings and LLM responses for enrichment |
 
@@ -93,6 +93,12 @@ The server targets AI agents and LLM-based applications that need to remember pa
 - Flushes to MongoDB on buffer full, timer elapsed, or write-through mode.
 - Falls back to local `audit_fallback.jsonl` file if MongoDB write fails.
 
+**`AuditFlushWorker`** (`services/audit_flush_worker.py`)
+- Runs as an `asyncio.Task` that periodically calls `AuditService.flush()`.
+- Interval configurable via `AUDIT_FLUSH_INTERVAL_SECONDS` (default: 60s).
+- Ensures buffered audit entries are persisted even if no new operations trigger a buffer-full flush.
+- Prevents audit data loss on process crash by reducing the window of unflushed entries.
+
 **`EnrichmentWorker`** (`services/enrichment.py`)
 - Runs as an `asyncio.Task` within the server process.
 - Polls for pending LTM memories every 30 seconds (configurable).
@@ -105,21 +111,32 @@ The server targets AI agents and LLM-based applications that need to remember pa
 - Compresses old STM (past `stm_compression_age_hours`), forgets low-importance memories, and promotes qualified STM to LTM.
 - Cycle interval configurable via `CONSOLIDATION_INTERVAL_HOURS`.
 
+**`AutoCaptureMiddleware`** (`services/auto_capture.py`)
+- Wraps registered MCP tools with transparent memory capture.
+- After each tool call completes, fires an async task to store the tool name, parameters, and response as an STM memory with `conversation_id="auto:<tool_name>"`.
+- Configurable via `AUTO_CAPTURE_ENABLED`, `AUTO_CAPTURE_TOOLS`, `AUTO_CAPTURE_MIN_LENGTH`, and `AUTO_CAPTURE_MAX_CONTENT_LENGTH`.
+- Excluded tools (`store_memory`, `wipe_user_data`, `delete_memory`, `cache_invalidate`) are never captured regardless of config.
+- Failures are logged but never propagated — auto-capture is strictly non-blocking.
+
 **`DecisionService`** (`services/decision.py`)
 - Keyed key-value store for sticky decisions/preferences.
 - Upserts by `(user_id, key)` with optional TTL via MongoDB TTL index on `expires_at`.
+- Seeds system defaults at startup (`system:governance_profile`, `system:prompt_experiment`) so the system has sensible preferences from first boot.
 
 **`GovernanceService`** (`services/governance.py`)
 - Role-based access policies (admin, power_user, end_user) stored in `governance_profiles` collection.
+- Seeds three default profiles at startup (admin, power_user, end_user) with per-role operation limits and allowed operations.
 - In-memory cache with configurable TTL.
 - Enabled via `GOVERNANCE_ENABLED=true`.
 
 **`RateLimiter`** (`services/rate_limiter.py`)
 - Sliding-window per-user rate limiting using the `rate_limits` collection.
+- Governance-aware: when a governance profile exists for the user's role, per-role limits (`max_searches_per_day`, `max_memories_per_day`) override the global `RATE_LIMIT_MAX_REQUESTS` default.
 - Enabled via `RATE_LIMIT_ENABLED=true`.
 
 **`PromptLibrary`** (`services/prompt_library.py`)
 - Versioned prompt templates stored in the `prompts` collection.
+- Seeds default prompt templates at startup (`importance_assessment`, `summary_generation`, `merge_prompt`) so enrichment works from first boot.
 - Falls back to hardcoded defaults when `PROMPT_EXPERIMENT_ENABLED=false`.
 
 ### Tool Layer (`tools/`)
@@ -195,6 +212,37 @@ EnrichmentWorker (continuous loop, every 30s)
     → MongoDB update: enrichment_status="complete", importance, summary
 ```
 
+### Startup Seeding (Stage 1b)
+
+```
+Server lifespan startup
+  → Stage 1: ensure_indexes() — standard B-tree indexes (blocking)
+  → Stage 1b: Seed essential data (best-effort, non-fatal)
+    → GovernanceService.seed_defaults() (if GOVERNANCE_ENABLED)
+      → Upsert 3 profiles: admin, power_user, end_user
+    → PromptLibrary.seed_defaults()
+      → Insert 3 templates: importance_assessment, summary_generation, merge_prompt (skip if exists)
+    → DecisionService.seed_defaults()
+      → Insert 2 decisions: system:governance_profile, system:prompt_experiment (user_id="system", skip if exists)
+  → Start background workers (enrichment, consolidation, audit flush)
+  → Auto-capture: wrap registered tools (if AUTO_CAPTURE_ENABLED)
+  → Stage 2: Atlas Search indexes (background, non-blocking)
+```
+
+### Auto-Capture
+
+```
+MCP Client
+  → any_tool(user_id, ...)
+    → AutoCaptureMiddleware.wrapped()
+      → original_fn(*args, **kwargs) → result
+      → asyncio.create_task(capture(tool_name, kwargs, result))
+        → should_capture? (enabled, tool in list, not excluded, has user_id)
+        → build_content(tool_name, params, response) → string (truncated to max_content_length)
+        → MemoryService.store_stm(user_id, conversation_id="auto:<tool_name>", messages=[...])
+    ← result (unmodified — capture is fire-and-forget)
+```
+
 ## Key Design Decisions
 
 ### Single-process architecture
@@ -227,6 +275,18 @@ EnrichmentWorker (continuous loop, every 30s)
 **Context:** Atlas Search index creation can take minutes and may fail on non-Atlas deployments.
 **Decision:** Standard B-tree indexes are created synchronously at startup (Stage 1). Atlas Search indexes are created in a background task (Stage 2) that polls for readiness with a 120-second timeout.
 **Rationale:** The server becomes available after Stage 1 completes. If Stage 2 fails, the server runs without vector/FTS search — tools degrade but do not crash.
+
+### Startup seeding over LLM-dependent initialization
+
+**Context:** Governance profiles, prompt templates, and system decisions were previously hardcoded as in-memory fallbacks. The database was never populated unless the LLM happened to call the right tools.
+**Decision:** Seed all essential configuration data to the database at startup (Stage 1b). Seeding is idempotent (skip if exists) and best-effort (failures are logged but non-fatal).
+**Rationale:** Anything the system needs to function should not depend on the LLM choosing to create it. DB-first seeding eliminates wasted round-trips (query-miss-fallback), makes configuration editable by admins via the database, and ensures the system is fully operational from first boot.
+
+### Auto-capture over LLM-dependent memory storage
+
+**Context:** If the LLM never calls `store_memory`, the memory store remains empty and recall returns nothing — defeating the purpose of the system.
+**Decision:** Wrap MCP tools with middleware that automatically stores tool interactions as STM memories. Capture is fire-and-forget (async task, failures logged, never blocks the response).
+**Rationale:** Ensures the memory store is populated through normal usage even when the LLM does not cooperate. The auto-capture middleware is transparent to both the LLM and the tool implementation.
 
 ## Security Considerations
 

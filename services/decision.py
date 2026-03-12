@@ -11,6 +11,11 @@ from memory_mcp.core.config import MCPConfig
 
 logger = logging.getLogger(__name__)
 
+_SYSTEM_DEFAULTS = {
+    "system:governance_profile": "end_user",
+    "system:prompt_experiment": "true",
+}
+
 
 class DecisionService:
     """Store and recall sticky decisions with configurable TTL."""
@@ -72,3 +77,16 @@ class DecisionService:
             "updated_at": doc.get("updated_at", "").isoformat() if isinstance(doc.get("updated_at"), datetime) else str(doc.get("updated_at", "")),
             "expires_at": doc.get("expires_at", "").isoformat() if isinstance(doc.get("expires_at"), datetime) else str(doc.get("expires_at", "")),
         }
+
+    async def seed_defaults(self, system_user_id: str = "system") -> int:
+        """Seed system-default decisions. Returns count inserted.
+
+        Idempotent: skips decisions that already exist for the system user.
+        """
+        count = 0
+        for key, value in _SYSTEM_DEFAULTS.items():
+            existing = await self.recall(system_user_id, key)
+            if existing is None:
+                await self.store(system_user_id, key, value)
+                count += 1
+        return count

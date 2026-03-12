@@ -31,11 +31,13 @@ memory-mcp
 The server starts on `http://0.0.0.0:8000` using Streamable HTTP transport. On startup it:
 
 1. Connects to MongoDB and verifies the connection
-2. Creates standard B-tree indexes (blocking)
+2. Creates standard B-tree indexes (blocking, Stage 1)
 3. Initializes embedding and LLM providers
 4. Creates service instances and populates the service registry
-5. Starts the enrichment and consolidation background workers
-6. Launches Atlas Search index creation in the background
+5. Seeds essential data to the database: governance profiles, prompt templates, system decisions (Stage 1b, idempotent, best-effort)
+6. Starts background workers: enrichment, consolidation, and audit flush
+7. Wraps MCP tools with auto-capture middleware (if `AUTO_CAPTURE_ENABLED`)
+8. Launches Atlas Search index creation in the background (Stage 2)
 
 An unauthenticated `/health` endpoint is available for Docker and load balancer probes.
 
@@ -63,12 +65,14 @@ services/
   memory.py           # MemoryService (store, recall, delete, evolve)
   cache.py            # CacheService (check, store, invalidate)
   audit.py            # AuditService (buffered logging)
+  audit_flush_worker.py  # AuditFlushWorker (periodic background flush)
+  auto_capture.py     # AutoCaptureMiddleware (transparent tool interaction capture)
   enrichment.py       # EnrichmentWorker (background async task)
   consolidation.py    # ConsolidationWorker (STM compression, forgetting, promotion)
-  decision.py         # DecisionService (keyed key-value store with TTL)
-  governance.py       # GovernanceService (role-based access policies)
-  rate_limiter.py     # RateLimiter (sliding-window per-user limits)
-  prompt_library.py   # PromptLibrary (versioned prompt templates)
+  decision.py         # DecisionService (keyed key-value store with TTL, startup seeding)
+  governance.py       # GovernanceService (role-based access policies, startup seeding)
+  rate_limiter.py     # RateLimiter (sliding-window, governance-aware per-role limits)
+  prompt_library.py   # PromptLibrary (versioned prompt templates, startup seeding)
 tools/
   memory_tools.py     # store_memory, recall_memory, delete_memory
   cache_tools.py      # check_cache, store_cache
