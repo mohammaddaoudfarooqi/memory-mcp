@@ -1,13 +1,14 @@
 FROM python:3.11-slim
 
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 WORKDIR /app
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential && \
-    rm -rf /var/lib/apt/lists/*
+# Copy project metadata and lockfile first for better layer caching
+COPY pyproject.toml uv.lock ./
 
-# Copy project metadata and source so pip install works
-COPY pyproject.toml .
+# Copy source files needed by the build
 COPY __init__.py .
 COPY __main__.py .
 COPY server.py .
@@ -18,8 +19,9 @@ COPY tools/ tools/
 COPY auth/ auth/
 COPY utils/ utils/
 
-RUN pip install --no-cache-dir .
+# Install dependencies using locked graph
+RUN uv sync --frozen
 
 EXPOSE 8000
 
-CMD ["memory-mcp"]
+CMD ["uv", "run", "memory-mcp"]

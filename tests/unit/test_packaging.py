@@ -95,23 +95,26 @@ class TestDockerfile:
     def test_exposes_port_8000(self):
         assert any("EXPOSE 8000" in line for line in self.lines)
 
-    def test_cmd_is_memory_mcp(self):
-        assert any('CMD ["memory-mcp"]' in line for line in self.lines)
+    def test_cmd_uses_uv_run(self):
+        assert any('CMD ["uv", "run", "memory-mcp"]' in line for line in self.lines)
 
-    def test_pip_install_no_cache(self):
-        assert "pip install --no-cache-dir ." in self.text
+    def test_uv_sync_frozen(self):
+        assert "uv sync --frozen" in self.text
+
+    def test_installs_uv_binary(self):
+        assert any("ghcr.io/astral-sh/uv" in line for line in self.lines)
 
     def test_copies_pyproject_toml(self):
         assert any("COPY pyproject.toml" in line for line in self.lines)
+
+    def test_copies_uv_lock(self):
+        assert any("uv.lock" in line for line in self.lines)
 
     def test_copies_source_directories(self):
         for directory in ["core/", "providers/", "services/", "tools/"]:
             assert any(
                 f"COPY {directory}" in line for line in self.lines
             ), f"Missing COPY for {directory}"
-
-    def test_apt_cache_cleanup(self):
-        assert "rm -rf /var/lib/apt/lists/*" in self.text
 
 
 # ---------------------------------------------------------------------------
